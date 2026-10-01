@@ -6,9 +6,7 @@ import { ordersChannel } from "./channels/orders.ts";
 ordersChannel.consume(
   "orders-queue",
   async (message) => {
-    if (!message) {
-      return null;
-    }
+    if (!message) return;
 
     let payload: { data?: { orderId?: string } } | undefined;
 
