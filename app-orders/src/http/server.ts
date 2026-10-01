@@ -49,11 +49,12 @@ app.post(
       status: "pending",
     });
 
-    const span = tracer.startSpan("Eu acho que aqui ta dando merda");
+    const span = tracer.startSpan("eu acho que aqui ta dando merda");
     span.setAttribute("teste", "Teste de tempo de processamento alto.");
 
     await setTimeout(2000);
-    span.end;
+
+    span.end();
 
     trace.getActiveSpan()?.setAttribute("order_id", orderId);
 
