@@ -14,7 +14,7 @@ import { db } from "../db/client.ts";
 import { schema } from "../db/schema/index.ts";
 import { dispatchOrderCreated } from "../broker/messages/order-created.ts";
 
-const app = fastify().withTypeProvider<ZodTypeProvider>();
+export const app = fastify().withTypeProvider<ZodTypeProvider>();
 
 app.setSerializerCompiler(serializerCompiler);
 app.setValidatorCompiler(validatorCompiler);
@@ -62,7 +62,3 @@ app.post(
     return reply.status(201).send();
   },
 );
-
-app.listen({ host: "0.0.0.0", port: 3333 }).then(() => {
-  console.log("[Orders] HTTP Server running !");
-});
