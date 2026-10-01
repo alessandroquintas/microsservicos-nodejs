@@ -1,2 +1,13 @@
 config:
   aws:region: us-east-1
+  microsservico-node-infra:ordersDatabaseUrl:
+    secure: AAABAEr0cYhnGd0eTsQ53Lb49TSOAwR7v7Haap1VZLlej5d2vkzO46ZKfMstNfdxpSWCIksIZPOVB2acU8nnaiIXYmZIRiMvl6jIIA1eUVep8ekaQtHXiWER5/6s0Eo5KWmH4WSeCPFVFKCSPOxnm+W1zzoW7LjWd2omzm8QKbS2sfBRMh3SkHpOcy/ZJOucw5/F7av5QF8RDfthZ2ooHzUBRVHdaOE5GIPNVKXmPA==
+  microsservico-node-infra:otlpHeaders:
+    secure: AAABAMC2l6zHmqDtDE+1+DSEWkxxbuE1JjMaUscQI0j/yR50GTqWkB3kieFU+hc57nUA7x0E2A5jhcS9lO8fqyJXmxsxWJpIIcz5+Wm0ukdZw3DukxO03f0WUgoJ/rwnAZH91oyhfa1y1XAqj45pMIS3m7XBxPQSQKw9iU5ygdXo4Yf38IBaTeZF7+EtieM+lxF7AXSn5SeG9Y+yh9lI8DWjSi0/h8eGmV1qSbJpLCKy7ezg1AtYB4tjweKF1SrJaWWjZ5V0J1LMRGP3PowVpw13EQqNYk1mOaCmGZNfrRRCHXkP48G4wK4vxH2TvskmM7icqGmp
+  microsservico-node-infra:invoicesDatabaseUrl:
+    secure: AAABAAKbSuPnYo+Qyk+6UXlGNr1NicUCQw4XzTlaHifNICm14b7v9x7goM0S450VIw3lyxwHfVn9n2BgK7gdqmhui1FTtkgMjTcEeZeC38oWexEiphDMnGdOr7myAXc3uwwveI7UHXb6yTPvKbB5rT4A30IMuqLukPV7WLGsNPjALgZyHHUxBxxlTxbR4x0GjjT+iLtwR6rwNkAgSR+qWpVDc0orZa9/gicBDwETKhr4t7Q=
+  microsservico-node-infra:otlpEndpoint: https://otlp-gateway-prod-sa-east-1.grafana.net/otlp
+  microsservico-node-infra:brokerUsername:
+    secure: AAABADSjfqQhLfcwf4F7AzJvIdlw8VGqcWccg9gFfl3Ai9rK
+  microsservico-node-infra:brokerPassword:
+    secure: AAABADKQGzp4WclqNnCCAYx3TXJWfcHJ7lO5Sv/mGhLN5SBw

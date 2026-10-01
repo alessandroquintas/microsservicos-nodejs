@@ -4,6 +4,13 @@ import { cluster } from "../cluster";
 import { invoicesDockerImage } from "../images/invoices";
 import { appLoadBalancer } from "../load-balancer";
 import { amqpListener } from "./rabbitmq";
+import {
+  invoicesDatabaseUrl,
+  otlpEndpoint,
+  otlpHeaders,
+  rabbitmqPassword,
+  rabbitmqUsername,
+} from "../config";
 
 const invoicesTargetGroup = appLoadBalancer.createTargetGroup(
   "invoices-target",
@@ -42,12 +49,11 @@ export const invoicesService = new awsx.classic.ecs.FargateService(
         environment: [
           {
             name: "BROKER_URL",
-            value: pulumi.interpolate`amqp://root:root@${amqpListener.endpoint.hostname}:${amqpListener.endpoint.port}`,
+            value: pulumi.interpolate`amqp://${rabbitmqUsername}:${rabbitmqPassword}@${amqpListener.endpoint.hostname}:${amqpListener.endpoint.port}`,
           },
           {
             name: "DATABASE_URL",
-            value:
-              "postgresql://neondb_owner:npg_ePOF4XpA1ZQm@ep-frosty-cherry-b4d179nz.c-6.us-east-2.aws.neon.tech/invoices?sslmode=require&channel_binding=require",
+            value: invoicesDatabaseUrl,
           },
 
           // OpenTelemetry -> Grafana Cloud
@@ -56,12 +62,11 @@ export const invoicesService = new awsx.classic.ecs.FargateService(
           { name: "OTEL_EXPORTER_OTLP_PROTOCOL", value: "http/protobuf" },
           {
             name: "OTEL_EXPORTER_OTLP_ENDPOINT",
-            value: "https://otlp-gateway-prod-sa-east-1.grafana.net/otlp",
+            value: otlpEndpoint,
           },
           {
             name: "OTEL_EXPORTER_OTLP_HEADERS",
-            value:
-              "Authorization=Basic MTg1MDczNjpnbGNfZXlKdklqb2lNVGt6TURBNE9TSXNJbTRpT2lKdGFXTnliM05sY25acFkyVnpMVzV2WkdVaUxDSnJJam9pTXpBeVlUUTViVXRXVURWc1JEZzRjVzR3UTNKNU1rbEVJaXdpYlNJNmV5SnlJam9pY0hKdlpDMXpZUzFsWVhOMExURWlmWDA9",
+            value: otlpHeaders,
           },
           { name: "OTEL_NODE_RESOURCE_DETECTORS", value: "env,host,os" },
           {
