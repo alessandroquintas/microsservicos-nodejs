@@ -1,30 +1,33 @@
 import * as awsx from "@pulumi/awsx";
 import * as pulumi from "@pulumi/pulumi";
 import { cluster } from "../cluster";
-import { ordersDockerImage } from "../images/orders";
-import { amqpListener } from "./rabbitmq";
+import { invoicesDockerImage } from "../images/invoices";
 import { appLoadBalancer } from "../load-balancer";
+import { amqpListener } from "./rabbitmq";
 
-const ordersTargetGroup = appLoadBalancer.createTargetGroup("orders-target", {
-  port: 3333, // a porta em que o seu Fastify escuta
-  protocol: "HTTP",
-  healthCheck: {
-    path: "/health",
-    protocol: "HTTP",
-  },
-});
-
-export const ordersHttpListener = appLoadBalancer.createListener(
-  "orders-listener",
+const invoicesTargetGroup = appLoadBalancer.createTargetGroup(
+  "invoices-target",
   {
-    port: 3333,
+    port: 3334, // a porta em que o Fastify escuta
     protocol: "HTTP",
-    targetGroup: ordersTargetGroup,
+    healthCheck: {
+      path: "/health",
+      protocol: "HTTP",
+    },
   },
 );
 
-export const ordersService = new awsx.classic.ecs.FargateService(
-  "fargate-orders",
+export const invoicesHttpListener = appLoadBalancer.createListener(
+  "invoices-listener",
+  {
+    port: 3334,
+    protocol: "HTTP",
+    targetGroup: invoicesTargetGroup,
+  },
+);
+
+export const invoicesService = new awsx.classic.ecs.FargateService(
+  "fargate-invoices",
   {
     cluster,
     desiredCount: 1,
@@ -32,8 +35,8 @@ export const ordersService = new awsx.classic.ecs.FargateService(
 
     taskDefinitionArgs: {
       container: {
-        portMappings: [ordersHttpListener],
-        image: ordersDockerImage.ref,
+        portMappings: [invoicesHttpListener],
+        image: invoicesDockerImage.ref,
         cpu: 256,
         memory: 512,
         environment: [
@@ -44,11 +47,11 @@ export const ordersService = new awsx.classic.ecs.FargateService(
           {
             name: "DATABASE_URL",
             value:
-              "postgresql://neondb_owner:npg_LeAfy91wWcGC@ep-wispy-salad-b56wravh.c-7.us-east-2.aws.neon.tech/orders?sslmode=require&channel_binding=require",
+              "postgresql://neondb_owner:npg_ePOF4XpA1ZQm@ep-frosty-cherry-b4d179nz.c-6.us-east-2.aws.neon.tech/invoices?sslmode=require&channel_binding=require",
           },
 
           // OpenTelemetry -> Grafana Cloud
-          { name: "OTEL_SERVICE_NAME", value: "app-orders" },
+          { name: "OTEL_SERVICE_NAME", value: "app-invoices" },
           { name: "OTEL_TRACES_EXPORTER", value: "otlp" },
           { name: "OTEL_EXPORTER_OTLP_PROTOCOL", value: "http/protobuf" },
           {

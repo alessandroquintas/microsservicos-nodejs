@@ -4,6 +4,7 @@ import { cluster } from "../cluster";
 import { kongDockerImage } from "../images/kong";
 import { ordersHttpListener } from "./orders";
 import { appLoadBalancer } from "../load-balancer";
+import { invoicesHttpListener } from "./invoices";
 
 const proxyTargetGroup = appLoadBalancer.createTargetGroup("proxy-target", {
   port: 8000, // a porta em que o seu Fastify escuta
@@ -82,6 +83,10 @@ export const kongService = new awsx.classic.ecs.FargateService("fargate-kong", {
         {
           name: "ORDERS_SERVICE_URL",
           value: pulumi.interpolate`http://${ordersHttpListener.endpoint.hostname}:${ordersHttpListener.endpoint.port}`,
+        },
+        {
+          name: "INVOICES_SERVICE_URL",
+          value: pulumi.interpolate`http://${invoicesHttpListener.endpoint.hostname}:${invoicesHttpListener.endpoint.port}`,
         },
       ],
     },
