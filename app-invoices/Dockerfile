@@ -28,9 +28,9 @@ COPY --from=deps /app/node_modules ./node_modules
 
 USER api
 
-EXPOSE 3333
+EXPOSE 3334
 
-ENV PORT=3333
+ENV PORT=3334
 ENV HOSTNAME="0.0.0.0"
 
 ENTRYPOINT [ "npm", "run", "start" ]
