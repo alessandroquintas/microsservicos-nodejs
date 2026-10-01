@@ -5,7 +5,6 @@ import { fastifyCors } from "@fastify/cors";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import { trace } from "@opentelemetry/api";
-import { setTimeout } from "node:timers/promises";
 import {
   serializerCompiler,
   validatorCompiler,
@@ -14,7 +13,6 @@ import {
 import { db } from "../db/client.ts";
 import { schema } from "../db/schema/index.ts";
 import { dispatchOrderCreated } from "../broker/messages/order-created.ts";
-import { tracer } from "../tracer/tracer.ts";
 
 const app = fastify().withTypeProvider<ZodTypeProvider>();
 
@@ -48,13 +46,6 @@ app.post(
       amount,
       status: "pending",
     });
-
-    const span = tracer.startSpan("eu acho que aqui ta dando merda");
-    span.setAttribute("teste", "Teste de tempo de processamento alto.");
-
-    await setTimeout(2000);
-
-    span.end();
 
     trace.getActiveSpan()?.setAttribute("order_id", orderId);
 
