@@ -20,12 +20,13 @@ services:
 
   api-gateway:
     container_name: apigateway
-    image: kong:3.9
+    build:
+      context: "./docker/kong"
     environment:
       KONG_DATABASE: "off"
       KONG_ADMIN_LISTEN: "0.0.0.0:8001"
       KONG_ADMIN_GUI_URL: http://localhost:8002
-      KONG_DECLARATIVE_CONFIG: "/kong/config.yaml"
+      ORDERS_SERVICE_URL: http://host.docker.internal:3333
     extra_hosts:
       - "host.docker.internal:host-gateway"
     ports:
@@ -34,8 +35,6 @@ services:
       - "8002:8002" # UI (ADMIN)
       - "8443:8443" # PROXY SSL (HTTPS)
       - "8444:8444" # API (Admin) (HTTPS)
-    volumes:
-      - "./docker/kong/config.yaml:/kong/config.yaml"
 
 volumes:
   rabbitmq_data:
