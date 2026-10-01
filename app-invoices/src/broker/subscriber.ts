@@ -2,7 +2,6 @@ import { randomUUID } from "node:crypto";
 import { db } from "../db/client.ts";
 import { schema } from "../db/schema/index.ts";
 import { ordersChannel } from "./channels/orders.ts";
-import { channel } from "node:diagnostics_channel";
 
 ordersChannel.consume(
   "orders-queue",
@@ -11,8 +10,10 @@ ordersChannel.consume(
       return null;
     }
 
+    let payload: { data?: { orderId?: string } } | undefined;
+
     try {
-      const payload = JSON.parse(message.content.toString());
+      payload = JSON.parse(message.content.toString());
       const orderId = payload?.data?.orderId;
       const invoiceId = randomUUID();
 
@@ -24,7 +25,10 @@ ordersChannel.consume(
       await db.insert(schema.invoices).values({ id: invoiceId, orderId });
       ordersChannel.ack(message);
     } catch (error) {
-      console.error("Failed to process OrderCreated", error);
+      console.error("Failed to process OrderCreated", {
+        orderId: payload?.data?.orderId,
+        error,
+      });
       ordersChannel.nack(message, false, false); // não reenfileira
     }
   },
