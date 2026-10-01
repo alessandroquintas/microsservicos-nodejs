@@ -1,45 +1,17 @@
 import * as pulumi from "@pulumi/pulumi";
-import * as aws from "@pulumi/aws";
-import * as awsx from "@pulumi/awsx";
-import * as docker from "@pulumi/docker-build";
 
-const ordersECRRepository = new awsx.ecr.Repository("app-orders-ecr", {
-  forceDelete: true,
-});
+import { ordersHttpListener, ordersService } from "./src/services/orders";
+import {
+  rabbitMQService,
+  rabbitMQAdminHttpListener,
+} from "./src/services/rabbitmq";
+import { kongService, adminHttpListener } from "./src/services/kong";
 
-const ordersECRToken = aws.ecr.getAuthorizationTokenOutput({
-  registryId: ordersECRRepository.repository.registryId,
-});
+export const ordersId = ordersService.service.id;
+export const ordersUrl = pulumi.interpolate`http://${ordersHttpListener.endpoint.hostname}`;
 
-const ordersDockerImage = new docker.Image("app-orders-image", {
-  tags: [
-    pulumi.interpolate`${ordersECRRepository.repository.repositoryUrl}:latest`,
-  ],
-  context: {
-    location: "../app-orders",
-  },
-  push: true,
-  platforms: ["linux/amd64"],
-  registries: [
-    {
-      address: ordersECRRepository.repository.repositoryUrl,
-      username: ordersECRToken.userName,
-      password: ordersECRToken.password,
-    },
-  ],
-});
+export const rabbitMQId = rabbitMQService.service.id;
+export const rabbitMQAdminUrl = pulumi.interpolate`http://${rabbitMQAdminHttpListener.endpoint.hostname}:15672`;
 
-const cluster = new awsx.classic.ecs.Cluster("app-cluster");
-
-const ordersService = new awsx.classic.ecs.FargateService("farget-orders", {
-  cluster,
-  desiredCount: 1,
-  waitForSteadyState: false,
-  taskDefinitionArgs: {
-    container: {
-      image: ordersDockerImage.ref,
-      cpu: 256,
-      memory: 512,
-    },
-  },
-});
+export const kongId = kongService.service.id;
+export const kongUIUrl = pulumi.interpolate`http://${adminHttpListener.endpoint.hostname}:${adminHttpListener.endpoint.port}`;
