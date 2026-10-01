@@ -18,6 +18,7 @@ ordersChannel.consume(
       const invoiceId = randomUUID();
 
       if (!orderId) {
+        console.warn("OrderCreated without orderId, discarding", { payload });
         ordersChannel.nack(message, false, false); // não reenfileira
         return;
       }
