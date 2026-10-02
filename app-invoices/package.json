@@ -4,9 +4,12 @@
   "main": "index.js",
   "type": "module",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1",
-    "dev": "node --env-file=.env --experimental-strip-types --watch --no-warnings src/http/server.ts",
-    "start": "node --experimental-strip-types --no-warnings src/http/server.ts"
+    "test": "vitest run",
+    "test:watch": "vitest watch",
+    "dev": "node --env-file=.env --experimental-strip-types --watch --no-warnings src/server.ts",
+    "start": "node --experimental-strip-types --no-warnings src/server.ts",
+    "db:migrate": "drizzle-kit migrate",
+    "db:migrate:test": "node --env-file=.env.test ./node_modules/.bin/drizzle-kit migrate"
   },
   "keywords": [],
   "author": "",
@@ -14,21 +17,22 @@
   "description": "",
   "dependencies": {
     "@fastify/cors": "^11.3.0",
+    "@opentelemetry/auto-instrumentations-node": "^0.80.0",
+    "@opentelemetry/sdk-node": "^0.222.0",
+    "@opentelemetry/sdk-trace-node": "^2.11.0",
     "amqplib": "^2.0.1",
     "drizzle-orm": "^0.45.3",
     "fastify": "^5.12.5",
     "fastify-type-provider-zod": "^7.0.0",
     "pg": "^8.23.0",
-    "zod": "^4.6.5",
-    "@opentelemetry/auto-instrumentations-node": "^0.80.0",
-    "@opentelemetry/sdk-node": "^0.222.0",
-    "@opentelemetry/sdk-trace-node": "^2.11.0"
+    "zod": "^4.6.5"
   },
   "devDependencies": {
     "@tsconfig/node22": "^22.0.6",
     "@types/amqplib": "^0.10.8",
     "@types/node": "^26.6.2",
     "drizzle-kit": "^0.31.11",
-    "typescript": "^7.0.2"
+    "typescript": "^7.0.2",
+    "vitest": "^5.0.3"
   }
 }
