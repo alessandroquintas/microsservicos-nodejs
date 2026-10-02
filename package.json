@@ -1,0 +1,10 @@
+{
+  "name": "microservices-nodejs",
+  "private": true,
+  "workspaces": [
+    "services/*"
+  ],
+  "scripts": {
+    "test": "npm run test --workspaces --if-present"
+  }
+}

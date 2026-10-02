@@ -1,5 +1,5 @@
 {
-  "name": "app-orders",
+  "name": "@microservices/invoices",
   "version": "1.0.0",
   "main": "index.js",
   "type": "module",
@@ -9,7 +9,7 @@
     "dev": "node --env-file=.env --experimental-strip-types --watch --no-warnings src/server.ts",
     "start": "node --experimental-strip-types --no-warnings src/server.ts",
     "db:migrate": "drizzle-kit migrate",
-    "db:migrate:test": "node --env-file=.env.test ./node_modules/.bin/drizzle-kit migrate"
+    "db:migrate:test": "node --env-file=.env.test ../../node_modules/.bin/drizzle-kit migrate"
   },
   "keywords": [],
   "author": "",
@@ -17,7 +17,6 @@
   "description": "",
   "dependencies": {
     "@fastify/cors": "^11.3.0",
-    "@opentelemetry/api": "^1.9.1",
     "@opentelemetry/auto-instrumentations-node": "^0.80.0",
     "@opentelemetry/sdk-node": "^0.222.0",
     "@opentelemetry/sdk-trace-node": "^2.11.0",
