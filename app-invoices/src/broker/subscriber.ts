@@ -1,35 +1,12 @@
-import { randomUUID } from "node:crypto";
-import { db } from "../db/client.ts";
-import { schema } from "../db/schema/index.ts";
 import { ordersChannel } from "./channels/orders.ts";
+import { handleOrderCreated } from "./handlers/order-created.handler.ts";
 
 ordersChannel.consume(
   "orders-queue",
   async (message) => {
     if (!message) return;
 
-    let payload: { data?: { orderId?: string } } | undefined;
-
-    try {
-      payload = JSON.parse(message.content.toString());
-      const orderId = payload?.data?.orderId;
-      const invoiceId = randomUUID();
-
-      if (!orderId) {
-        console.warn("OrderCreated without orderId, discarding", { payload });
-        ordersChannel.nack(message, false, false); // não reenfileira
-        return;
-      }
-
-      await db.insert(schema.invoices).values({ id: invoiceId, orderId });
-      ordersChannel.ack(message);
-    } catch (error) {
-      console.error("Failed to process OrderCreated", {
-        orderId: payload?.data?.orderId,
-        error,
-      });
-      ordersChannel.nack(message, false, false); // não reenfileira
-    }
+    return handleOrderCreated(message, ordersChannel);
   },
   {
     noAck: false,
