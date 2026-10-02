@@ -33,7 +33,7 @@ afterAll(async () => {
 });
 
 describe("POST /orders", () => {
-  it("should be able to create a pending order and dispatches OrderCreated", async () => {
+  it("creates a pending order and dispatches OrderCreated", async () => {
     const response = await app.inject({
       method: "POST",
       url: "/orders",
@@ -56,11 +56,22 @@ describe("POST /orders", () => {
     );
   });
 
-  it("should be able returns 400 when amount is invalid", async () => {
+  it("returns 400 when amount is invalid", async () => {
     const response = await app.inject({
       method: "POST",
       url: "/orders",
       payload: { amount: "abc" },
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(dispatchOrderCreated).not.toHaveBeenCalled();
+  });
+
+  it.each([-10, 0, 10.5])("returns 400 when amount is %s", async (amount) => {
+    const response = await app.inject({
+      method: "POST",
+      url: "/orders",
+      payload: { amount },
     });
 
     expect(response.statusCode).toBe(400);

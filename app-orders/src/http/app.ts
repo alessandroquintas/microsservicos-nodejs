@@ -1,5 +1,3 @@
-import "@opentelemetry/auto-instrumentations-node/register";
-
 import { fastify } from "fastify";
 import { fastifyCors } from "@fastify/cors";
 import { randomUUID } from "node:crypto";
@@ -30,7 +28,7 @@ app.post(
   {
     schema: {
       body: z.object({
-        amount: z.coerce.number(),
+        amount: z.coerce.number().int().positive(),
       }),
     },
   },
