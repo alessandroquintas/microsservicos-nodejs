@@ -22,7 +22,7 @@ afterAll(async () => {
 });
 
 describe("handleOrderCreated", () => {
-  it("should be able creates an invoice and acks the message", async () => {
+  it("creates an invoice and acks the message", async () => {
     const message = makeMessage(
       JSON.stringify({ data: { orderId: "order-1" } }),
     );
@@ -36,7 +36,7 @@ describe("handleOrderCreated", () => {
     expect(channel.nack).not.toHaveBeenCalled();
   });
 
-  it("should be nacks without requeue when orderId is missing", async () => {
+  it("nacks without requeue when orderId is missing", async () => {
     const message = makeMessage(JSON.stringify({ data: {} }));
 
     await handleOrderCreated(message, channel);
@@ -46,7 +46,7 @@ describe("handleOrderCreated", () => {
     expect(channel.ack).not.toHaveBeenCalled();
   });
 
-  it("should be nacks requeue when the message is not valid JSON", async () => {
+  it("nacks without requeue when the message is not valid JSON", async () => {
     const message = makeMessage("not-json");
 
     await handleOrderCreated(message, channel);
@@ -55,7 +55,7 @@ describe("handleOrderCreated", () => {
     expect(channel.ack).not.toHaveBeenCalled();
   });
 
-  it("should be nacks without requeue when the database fails", async () => {
+  it("nacks without requeue when the database fails", async () => {
     vi.spyOn(db, "insert").mockImplementationOnce(() => {
       throw new Error("database is down");
     });
