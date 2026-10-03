@@ -3,9 +3,23 @@ import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { db } from "../src/db/client.ts";
 import { schema } from "../src/db/schema/index.ts";
 import { handleOrderCreated } from "../src/broker/handlers/order-created.handler.ts";
+import { randomUUID } from "node:crypto";
+import type { OrderCreatedMessage } from "@microservices/contracts";
 
 function makeMessage(content: string) {
   return { content: Buffer.from(content) } as unknown as ConsumeMessage;
+}
+
+function validMessage(): OrderCreatedMessage {
+  return {
+    orderId: randomUUID(),
+    amount: 100,
+    customer: {
+      id: randomUUID(),
+      name: "John Doe",
+      email: "johndoe@example.com",
+    },
+  };
 }
 
 const channel = { ack: vi.fn(), nack: vi.fn() };
@@ -23,15 +37,14 @@ afterAll(async () => {
 
 describe("handleOrderCreated", () => {
   it("creates an invoice and acks the message", async () => {
-    const message = makeMessage(
-      JSON.stringify({ data: { orderId: "order-1" } }),
-    );
+    const data = validMessage();
+    const message = makeMessage(JSON.stringify({ data }));
 
     await handleOrderCreated(message, channel);
 
     const invoices = await db.select().from(schema.invoices);
     expect(invoices).toHaveLength(1);
-    expect(invoices[0].orderId).toBe("order-1");
+    expect(invoices[0].orderId).toBe(data.orderId);
     expect(channel.ack).toHaveBeenCalledWith(message);
     expect(channel.nack).not.toHaveBeenCalled();
   });
