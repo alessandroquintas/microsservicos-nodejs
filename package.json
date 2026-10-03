@@ -2,7 +2,8 @@
   "name": "microservices-nodejs",
   "private": true,
   "workspaces": [
-    "services/*"
+    "services/*",
+    "packages/*"
   ],
   "scripts": {
     "test": "npm run test --workspaces --if-present"
