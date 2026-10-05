@@ -49,7 +49,7 @@ describe("handleOrderCreated", () => {
     expect(channel.nack).not.toHaveBeenCalled();
   });
 
-  it("nacks without requeue when orderId is missing", async () => {
+  it("nacks without requeue when the message does not match the contract", async () => {
     const message = makeMessage(JSON.stringify({ data: {} }));
 
     await handleOrderCreated(message, channel);
@@ -69,15 +69,14 @@ describe("handleOrderCreated", () => {
   });
 
   it("nacks without requeue when the database fails", async () => {
-    vi.spyOn(db, "insert").mockImplementationOnce(() => {
+    const insertSpy = vi.spyOn(db, "insert").mockImplementationOnce(() => {
       throw new Error("database is down");
     });
-    const message = makeMessage(
-      JSON.stringify({ data: { orderId: "order-1" } }),
-    );
+    const message = makeMessage(JSON.stringify({ data: validMessage() }));
 
     await handleOrderCreated(message, channel);
 
+    expect(insertSpy).toHaveBeenCalled();
     expect(channel.nack).toHaveBeenCalledWith(message, false, false);
     expect(channel.ack).not.toHaveBeenCalled();
   });
