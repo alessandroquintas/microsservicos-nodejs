@@ -7,10 +7,11 @@ import { appLoadBalancer } from "../load-balancer";
 import { invoicesHttpListener } from "./invoices";
 
 const proxyTargetGroup = appLoadBalancer.createTargetGroup("proxy-target", {
-  port: 8000, // a porta em que o seu Fastify escuta
+  port: 8000, // tráfego dos clientes: proxy do Kong
   protocol: "HTTP",
   healthCheck: {
-    path: "/orders/health",
+    path: "/status/ready",
+    port: "8100", // health check: Status API do Kong
     protocol: "HTTP",
   },
 });
@@ -25,7 +26,7 @@ export const proxyHttpListener = appLoadBalancer.createListener(
 );
 
 const adminTargetGroup = appLoadBalancer.createTargetGroup("admin-target", {
-  port: 8002, // a porta em que o seu Fastify escuta
+  port: 8002,
   protocol: "HTTP",
   healthCheck: {
     path: "/",
@@ -45,7 +46,7 @@ export const adminHttpListener = appLoadBalancer.createListener(
 const adminAPITargetGroup = appLoadBalancer.createTargetGroup(
   "admin-api-target",
   {
-    port: 8001, // a porta em que o seu Fastify escuta
+    port: 8001,
     protocol: "HTTP",
     healthCheck: {
       path: "/",
@@ -76,10 +77,12 @@ export const kongService = new awsx.classic.ecs.FargateService("fargate-kong", {
         proxyHttpListener,
         adminHttpListener,
         adminAPIHttpListener,
+        { containerPort: 8100 },
       ],
       environment: [
         { name: "KONG_DATABASE", value: "off" },
         { name: "KONG_ADMIN_LISTEN", value: "0.0.0.0:8001" },
+        { name: "KONG_STATUS_LISTEN", value: "0.0.0.0:8100" },
         {
           name: "ORDERS_SERVICE_URL",
           value: pulumi.interpolate`http://${ordersHttpListener.endpoint.hostname}:${ordersHttpListener.endpoint.port}`,

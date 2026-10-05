@@ -28,6 +28,7 @@ services:
       KONG_ADMIN_GUI_URL: http://localhost:8002
       ORDERS_SERVICE_URL: http://host.docker.internal:3333
       INVOICES_SERVICE_URL: http://host.docker.internal:3334
+      KONG_STATUS_LISTEN: "0.0.0.0:8100"
     extra_hosts:
       - "host.docker.internal:host-gateway"
     ports:
@@ -36,6 +37,7 @@ services:
       - "8002:8002" # UI (ADMIN)
       - "8443:8443" # PROXY SSL (HTTPS)
       - "8444:8444" # API (Admin) (HTTPS)
+      - "8100:8100" # Status API (health check)
 
 volumes:
   rabbitmq_data:
