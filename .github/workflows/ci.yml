@@ -1,0 +1,61 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    services:
+      orders-db:
+        image: postgres:16
+        env:
+          POSTGRES_USER: docker
+          POSTGRES_PASSWORD: docker
+          POSTGRES_DB: orders_test
+        ports:
+          - 5482:5432
+        options: >-
+          --health-cmd "pg_isready -U docker"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+      invoices-db:
+        image: postgres:16
+        env:
+          POSTGRES_USER: docker
+          POSTGRES_PASSWORD: docker
+          POSTGRES_DB: invoices_test
+        ports:
+          - 5483:5432
+        options: >-
+          --health-cmd "pg_isready -U docker"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Migrate test databases
+        run: |
+          npm run db:migrate:test -w @microservices/orders
+          npm run db:migrate:test -w @microservices/invoices
+
+      - name: Test
+        run: npm test
