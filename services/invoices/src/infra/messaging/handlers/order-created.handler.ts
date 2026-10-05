@@ -1,6 +1,6 @@
 import type { Channel, ConsumeMessage } from "amqplib";
 import { orderCreatedMessageSchema } from "@microservices/contracts";
-import type { CreateInvoiceFromOrderUseCase } from "../../application/use-cases/create-invoice-from-order.ts";
+import type { CreateInvoiceFromOrderUseCase } from "../../../application/use-cases/create-invoice-from-order.ts";
 
 type AckChannel = Pick<Channel, "ack" | "nack">;
 type CreateInvoiceFromOrder = Pick<CreateInvoiceFromOrderUseCase, "execute">;
