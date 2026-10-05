@@ -1,8 +1,6 @@
 import type { ConsumeMessage } from "amqplib";
-import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { db } from "../src/db/client.ts";
-import { schema } from "../src/db/schema/index.ts";
-import { handleOrderCreated } from "../src/broker/handlers/order-created.handler.ts";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createOrderCreatedHandler } from "../src/broker/handlers/order-created.handler.ts";
 import { randomUUID } from "node:crypto";
 import type { OrderCreatedMessage } from "@microservices/contracts";
 
@@ -23,28 +21,23 @@ function validMessage(): OrderCreatedMessage {
 }
 
 const channel = { ack: vi.fn(), nack: vi.fn() };
+const createInvoiceFromOrder = { execute: vi.fn() };
+const handleOrderCreated = createOrderCreatedHandler(createInvoiceFromOrder);
 
-beforeEach(async () => {
-  vi.restoreAllMocks();
-  channel.ack.mockClear();
-  channel.nack.mockClear();
-  await db.delete(schema.invoices);
-});
-
-afterAll(async () => {
-  await db.$client.end();
+beforeEach(() => {
+  vi.clearAllMocks();
 });
 
 describe("handleOrderCreated", () => {
-  it("creates an invoice and acks the message", async () => {
+  it("creates an invoice for the order and acks the message", async () => {
     const data = validMessage();
     const message = makeMessage(JSON.stringify({ data }));
 
     await handleOrderCreated(message, channel);
 
-    const invoices = await db.select().from(schema.invoices);
-    expect(invoices).toHaveLength(1);
-    expect(invoices[0].orderId).toBe(data.orderId);
+    expect(createInvoiceFromOrder.execute).toHaveBeenCalledWith({
+      orderId: data.orderId,
+    });
     expect(channel.ack).toHaveBeenCalledWith(message);
     expect(channel.nack).not.toHaveBeenCalled();
   });
@@ -54,7 +47,7 @@ describe("handleOrderCreated", () => {
 
     await handleOrderCreated(message, channel);
 
-    expect(await db.select().from(schema.invoices)).toHaveLength(0);
+    expect(createInvoiceFromOrder.execute).not.toHaveBeenCalled();
     expect(channel.nack).toHaveBeenCalledWith(message, false, false);
     expect(channel.ack).not.toHaveBeenCalled();
   });
@@ -64,19 +57,20 @@ describe("handleOrderCreated", () => {
 
     await handleOrderCreated(message, channel);
 
+    expect(createInvoiceFromOrder.execute).not.toHaveBeenCalled();
     expect(channel.nack).toHaveBeenCalledWith(message, false, false);
     expect(channel.ack).not.toHaveBeenCalled();
   });
 
-  it("nacks without requeue when the database fails", async () => {
-    const insertSpy = vi.spyOn(db, "insert").mockImplementationOnce(() => {
-      throw new Error("database is down");
-    });
+  it("nacks without requeue when creating the invoice fails", async () => {
+    createInvoiceFromOrder.execute.mockRejectedValueOnce(
+      new Error("database is down"),
+    );
     const message = makeMessage(JSON.stringify({ data: validMessage() }));
 
     await handleOrderCreated(message, channel);
 
-    expect(insertSpy).toHaveBeenCalled();
+    expect(createInvoiceFromOrder.execute).toHaveBeenCalled();
     expect(channel.nack).toHaveBeenCalledWith(message, false, false);
     expect(channel.ack).not.toHaveBeenCalled();
   });

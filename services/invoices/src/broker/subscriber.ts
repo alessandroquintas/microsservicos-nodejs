@@ -1,14 +1,20 @@
-import { ordersChannel } from "./channels/orders.ts";
-import { handleOrderCreated } from "./handlers/order-created.handler.ts";
+import type { Channel, ConsumeMessage } from "amqplib";
 
-ordersChannel.consume(
-  "orders-queue",
-  async (message) => {
-    if (!message) return;
+type MessageHandler = (
+  message: ConsumeMessage,
+  channel: Channel,
+) => Promise<void>;
 
-    return handleOrderCreated(message, ordersChannel);
-  },
-  {
-    noAck: false,
-  },
-);
+export function startOrderCreatedConsumer(
+  channel: Channel,
+  handler: MessageHandler,
+) {
+  return channel.consume(
+    "orders-queue",
+    async (message) => {
+      if (!message) return;
+      return handler(message, channel);
+    },
+    { noAck: false },
+  );
+}
