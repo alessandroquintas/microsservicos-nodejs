@@ -1,14 +1,14 @@
 import "@opentelemetry/auto-instrumentations-node/register";
 
-import { app } from "./http/app.ts";
-import "./broker/subscriber.ts";
-import { DrizzleInvoicesRepository } from "./db/repositories/drizzle-invoices-repository.ts";
-import { db } from "./db/client.ts";
-import { CreateInvoiceFromOrderUseCase } from "./application/use-cases/create-invoice-from-order.ts";
-import { createOrderCreatedHandler } from "./broker/handlers/order-created.handler.ts";
-import { startOrderCreatedConsumer } from "./broker/subscriber.ts";
-import { ordersChannel } from "./broker/channels/orders.ts";
+import "./infra/messaging/subscriber.ts";
 
+import { app } from "./infra/http/app.ts";
+import { CreateInvoiceFromOrderUseCase } from "./application/use-cases/create-invoice-from-order.ts";
+import { DrizzleInvoicesRepository } from "./infra/db/repositories/drizzle-invoices-repository.ts";
+import { db } from "./infra/db/client.ts";
+import { startOrderCreatedConsumer } from "./infra/messaging/subscriber.ts";
+import { ordersChannel } from "./infra/messaging/channels/orders.ts";
+import { createOrderCreatedHandler } from "./infra/messaging/handlers/order-created.handler.ts";
 // Adapters de saída
 const invoicesRepository = new DrizzleInvoicesRepository(db);
 

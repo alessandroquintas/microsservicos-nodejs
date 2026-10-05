@@ -2,9 +2,9 @@ import { describe, it, beforeEach, afterAll } from "vitest";
 
 import { InvoiceEntity } from "../../src/domain/invoices-entity.ts";
 import { randomUUID } from "node:crypto";
-import { DrizzleInvoicesRepository } from "../../src/db/repositories/drizzle-invoices-repository.ts";
-import { db } from "../../src/db/client.ts";
-import { schema } from "../../src/db/schema/index.ts";
+import { DrizzleInvoicesRepository } from "../../src/infra/db/repositories/drizzle-invoices-repository.ts";
+import { db } from "../../src/infra/db/client.ts";
+import { schema } from "../../src/infra/db/schema/index.ts";
 
 const sut = new DrizzleInvoicesRepository(db);
 
