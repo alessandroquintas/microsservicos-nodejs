@@ -1,6 +1,5 @@
 import { fastify } from "fastify";
 import { fastifyCors } from "@fastify/cors";
-import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import { trace } from "@opentelemetry/api";
 import {
@@ -8,55 +7,57 @@ import {
   validatorCompiler,
   type ZodTypeProvider,
 } from "fastify-type-provider-zod";
-import { db } from "../db/client.ts";
-import { schema } from "../db/schema/index.ts";
-import { dispatchOrderCreated } from "../broker/messages/order-created.ts";
+import type { CreateOrderUseCase } from "../application/use-cases/create-order.ts";
+import { CustomerNotFoundError } from "../domain/customer/errors.ts";
 
-export const app = fastify().withTypeProvider<ZodTypeProvider>();
+// Temporário: até a feature de customers, todo pedido usa este customer.
+const DEFAULT_CUSTOMER_ID = "5961a952-0d3e-465f-b635-4b93a1cefa97";
 
-app.setSerializerCompiler(serializerCompiler);
-app.setValidatorCompiler(validatorCompiler);
+type AppDependencies = {
+  createOrder: Pick<CreateOrderUseCase, "execute">;
+};
 
-app.register(fastifyCors, { origin: "*" });
+export function buildApp({ createOrder }: AppDependencies) {
+  const app = fastify().withTypeProvider<ZodTypeProvider>();
 
-app.get("/health", () => {
-  return "Ok";
-});
+  app.setSerializerCompiler(serializerCompiler);
+  app.setValidatorCompiler(validatorCompiler);
 
-app.post(
-  "/orders",
-  {
-    schema: {
-      body: z.object({
-        amount: z.coerce.number().int().positive(),
-      }),
-    },
-  },
-  async (request, reply) => {
-    const { amount } = request.body;
+  app.register(fastifyCors, { origin: "*" });
 
-    console.log("Creating an order with amount", amount);
-    const orderId = randomUUID();
+  app.get("/health", () => {
+    return "Ok";
+  });
 
-    await db.insert(schema.orders).values({
-      id: orderId,
-      customerId: "5961a952-0d3e-465f-b635-4b93a1cefa97",
-      amount,
-      status: "pending",
-    });
-
-    trace.getActiveSpan()?.setAttribute("order_id", orderId);
-
-    await dispatchOrderCreated({
-      orderId,
-      amount,
-      customer: {
-        id: "5961a952-0d3e-465f-b635-4b93a1cefa97",
-        name: "John Doe",
-        email: "johndoe@example.com",
+  app.post(
+    "/orders",
+    {
+      schema: {
+        body: z.object({
+          amount: z.coerce.number().int().positive(),
+        }),
       },
-    });
+    },
+    async (request, reply) => {
+      try {
+        const { amount } = request.body;
 
-    return reply.status(201).send();
-  },
-);
+        const order = await createOrder.execute({
+          customerId: DEFAULT_CUSTOMER_ID,
+          amountInCents: amount,
+        });
+
+        trace.getActiveSpan()?.setAttribute("order_id", order.id);
+
+        return reply.status(201).send({ orderId: order.id });
+      } catch (error) {
+        if (error instanceof CustomerNotFoundError) {
+          return reply.status(404).send({ message: error.message });
+        }
+        throw error;
+      }
+    },
+  );
+
+  return app;
+}
