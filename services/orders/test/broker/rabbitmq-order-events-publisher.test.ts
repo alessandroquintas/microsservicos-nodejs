@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
-import { RabbitMQOrderEventsPublisher } from "../../src/broker/publisher/rabbitmq-order-events-publisher.ts";
+import { RabbitMQOrderEventsPublisher } from "../../src/infra/messaging/publisher/rabbitmq-order-events-publisher.ts";
 
 function validMessage() {
   return {

@@ -1,8 +1,9 @@
 import { eq } from "drizzle-orm";
-import { CustomerEntity } from "../../domain/customer/customer-entity.ts";
-import type { CustomersRepository } from "../../domain/customer/customers-repository.ts";
+
 import { db as database } from "../client.ts";
 import { schema } from "../schema/index.ts";
+import type { CustomersRepository } from "../../../domain/customer/customers-repository.ts";
+import { CustomerEntity } from "../../../domain/customer/customer-entity.ts";
 
 type Database = typeof database;
 

@@ -1,8 +1,9 @@
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
-import { db } from "../../src/db/client.ts";
-import { schema } from "../../src/db/schema/index.ts";
-import { DrizzleCustomersRepository } from "../../src/db/repositories/drizzle-customers-repository.ts";
+
 import { CustomerEntity } from "../../src/domain/customer/customer-entity.ts";
+import { DrizzleCustomersRepository } from "../../src/infra/db/repositories/drizzle-customers-repository.ts";
+import { db } from "../../src/infra/db/client.ts";
+import { schema } from "../../src/infra/db/schema/index.ts";
 
 const sut = new DrizzleCustomersRepository(db);
 

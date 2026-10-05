@@ -1,12 +1,12 @@
 import "@opentelemetry/auto-instrumentations-node/register";
 
-import { buildApp } from "./http/app.ts";
-import { DrizzleCustomersRepository } from "./db/repositories/drizzle-customers-repository.ts";
-import { db } from "./db/client.ts";
-import { DrizzleOrdersRepository } from "./db/repositories/drizzle-orders-repository.ts";
-import { RabbitMQOrderEventsPublisher } from "./broker/publisher/rabbitmq-order-events-publisher.ts";
-import { ordersChannel } from "./broker/channels/orders.ts";
 import { CreateOrderUseCase } from "./application/use-cases/create-order.ts";
+import { DrizzleCustomersRepository } from "./infra/db/repositories/drizzle-customers-repository.ts";
+import { DrizzleOrdersRepository } from "./infra/db/repositories/drizzle-orders-repository.ts";
+import { db } from "./infra/db/client.ts";
+import { RabbitMQOrderEventsPublisher } from "./infra/messaging/publisher/rabbitmq-order-events-publisher.ts";
+import { ordersChannel } from "./infra/messaging/channels/orders.ts";
+import { buildApp } from "./infra/http/app.ts";
 
 // Adapters de sáida
 const customersRepository = new DrizzleCustomersRepository(db);

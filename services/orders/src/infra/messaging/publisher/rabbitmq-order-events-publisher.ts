@@ -2,8 +2,8 @@ import {
   orderCreatedMessageSchema,
   type OrderCreatedMessage,
 } from "@microservices/contracts";
-import type { OrderEventsPublisher } from "../../application/ports/order-events-publisher.ts";
 import type { Channel } from "amqplib";
+import type { OrderEventsPublisher } from "../../../application/ports/order-events-publisher.ts";
 
 type PublishChannel = Pick<Channel, "sendToQueue">;
 

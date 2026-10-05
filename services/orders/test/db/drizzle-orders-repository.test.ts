@@ -1,10 +1,10 @@
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
-import { db } from "../../src/db/client.ts";
-import { schema } from "../../src/db/schema/index.ts";
-import { DrizzleOrdersRepository } from "../../src/db/repositories/drizzle-orders-repository.ts";
 
 import { Money } from "../../src/domain/shared/money.ts";
 import { OrderEntity } from "../../src/domain/orders-entity.ts";
+import { DrizzleOrdersRepository } from "../../src/infra/db/repositories/drizzle-orders-repository.ts";
+import { db } from "../../src/infra/db/client.ts";
+import { schema } from "../../src/infra/db/schema/index.ts";
 
 const CUSTOMER_ID = "customer-1";
 const sut = new DrizzleOrdersRepository(db);
