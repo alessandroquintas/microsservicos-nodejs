@@ -1,36 +1,35 @@
-FROM node:lts-alpine AS base
-
-# -----------
-
-FROM base AS deps
+FROM node:22-alpine AS base
 WORKDIR /app
 
-COPY package*.json ./ 
+# -----------
+# Dependências de produção, só do que o invoices usa
 
-RUN npm install --omit=dev
+FROM base AS deps
 
+COPY package.json package-lock.json ./
+COPY packages/contracts/package.json packages/contracts/
+COPY services/orders/package.json services/orders/
+COPY services/invoices/package.json services/invoices/
+
+RUN npm ci --omit=dev --workspace=@microservices/invoices
 
 # -----------
 
 FROM base AS runner
-WORKDIR /app
 
 ENV NODE_ENV=production
 
+RUN addgroup --system --gid 1001 nodejs \
+ && adduser --system --uid 1001 api
 
-RUN addgroup --system --gid 1001 nodejs
-RUN adduser --system --uid 1001 api
+COPY --from=deps --chown=api:nodejs /app ./
+COPY --chown=api:nodejs packages/contracts ./packages/contracts
+COPY --chown=api:nodejs services/invoices ./services/invoices
 
-RUN chown api:nodejs .
-
-COPY --chown=api:nodejs . .
-COPY --from=deps /app/node_modules ./node_modules
-
+WORKDIR /app/services/invoices
 USER api
 
+ENV PORT=3334
 EXPOSE 3334
 
-ENV PORT=3334
-ENV HOSTNAME="0.0.0.0"
-
-ENTRYPOINT [ "npm", "run", "start" ]
+CMD ["node", "--experimental-strip-types", "--no-warnings", "src/server.ts"]

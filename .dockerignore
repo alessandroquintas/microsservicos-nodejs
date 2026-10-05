@@ -1,0 +1,10 @@
+**/node_modules
+**/.env
+**/.env.*
+**/test
+**/vitest.config.ts
+**/docker-compose.yml
+.git
+infra
+docker
+services/*/docker
