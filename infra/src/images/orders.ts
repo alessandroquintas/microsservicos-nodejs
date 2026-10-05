@@ -16,7 +16,10 @@ export const ordersDockerImage = new docker.Image("app-orders-image", {
     pulumi.interpolate`${ordersECRRepository.repository.repositoryUrl}:latest`,
   ],
   context: {
-    location: "../app-orders",
+    location: "..",
+  },
+  dockerfile: {
+    location: "../services/orders/Dockerfile",
   },
   push: true,
   platforms: ["linux/amd64"],

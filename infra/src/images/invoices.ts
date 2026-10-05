@@ -16,7 +16,10 @@ export const invoicesDockerImage = new docker.Image("app-invoices-image", {
     pulumi.interpolate`${invoicesECRRepository.repository.repositoryUrl}:latest`,
   ],
   context: {
-    location: "../app-invoices",
+    location: "..",
+  },
+  dockerfile: {
+    location: "../services/invoices/Dockerfile",
   },
   push: true,
   platforms: ["linux/amd64"],
