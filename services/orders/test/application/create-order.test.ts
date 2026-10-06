@@ -7,6 +7,7 @@ import { InMemoryOrdersRepository } from "../fakes/in-memory-orders-repository.t
 import { FakeOrderEventsPublisher } from "../fakes/fake-order-events-publisher.ts";
 import { OrderStatus } from "../../src/domain/order/order-entity.ts";
 import { InvalidOrderAmountError } from "../../src/domain/order/errors.ts";
+import { InMemoryUnitOfWork } from "../fakes/in-memory-unit-of-work.ts";
 
 function makeCustomer() {
   return CustomerEntity.restore({
@@ -32,8 +33,7 @@ beforeEach(() => {
   orderEventsPublisher = new FakeOrderEventsPublisher();
   sut = new CreateOrderUseCase(
     customersRepository,
-    ordersRepository,
-    orderEventsPublisher,
+    new InMemoryUnitOfWork(ordersRepository, orderEventsPublisher),
   );
 
   customersRepository.items.push(makeCustomer());
