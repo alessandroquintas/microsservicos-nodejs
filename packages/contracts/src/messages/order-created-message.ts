@@ -11,3 +11,5 @@ export const orderCreatedMessageSchema = z.object({
 });
 
 export type OrderCreatedMessage = z.infer<typeof orderCreatedMessageSchema>;
+
+export const ORDER_CREATED_EVENT = "OrderCreated";
