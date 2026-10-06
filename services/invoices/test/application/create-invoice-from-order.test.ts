@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { InMemoryInvoicesRepository } from "./repositories/in-memory-invoices-repository.ts";
-import { CreateInvoiceFromOrderUseCase } from "../src/application/use-cases/create-invoice-from-order.ts";
+import { InMemoryInvoicesRepository } from "../fakes/in-memory-invoices-repository.ts";
+import { CreateInvoiceFromOrderUseCase } from "../../src/application/use-cases/create-invoice-from-order.ts";
 
 let invoicesRepository: InMemoryInvoicesRepository;
 let sut: CreateInvoiceFromOrderUseCase;

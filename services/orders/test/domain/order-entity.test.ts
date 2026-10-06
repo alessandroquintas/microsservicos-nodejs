@@ -1,11 +1,11 @@
 import { describe, it, expect } from "vitest";
 import { Money } from "../../src/domain/shared/money.ts";
-import { OrderEntity, OrderStatus } from "../../src/domain/orders-entity.ts";
+import { OrderEntity, OrderStatus } from "../../src/domain/order/order-entity.ts";
 import {
   InvalidCustomerIdError,
   InvalidOrderAmountError,
   InvalidOrderStatusTransitionError,
-} from "../../src/domain/errors.ts";
+} from "../../src/domain/order/errors.ts";
 
 function makeOrder() {
   return OrderEntity.create({

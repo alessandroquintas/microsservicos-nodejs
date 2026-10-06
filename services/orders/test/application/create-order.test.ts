@@ -2,11 +2,11 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { CreateOrderUseCase } from "../../src/application/use-cases/create-order.ts";
 import { CustomerEntity } from "../../src/domain/customer/customer-entity.ts";
 import { CustomerNotFoundError } from "../../src/domain/customer/errors.ts";
-import { InMemoryCustomersRepository } from "../repositories/in-memory-customers-repository.ts";
-import { InMemoryOrdersRepository } from "../repositories/in-memory-orders-repository.ts";
+import { InMemoryCustomersRepository } from "../fakes/in-memory-customers-repository.ts";
+import { InMemoryOrdersRepository } from "../fakes/in-memory-orders-repository.ts";
 import { FakeOrderEventsPublisher } from "../fakes/fake-order-events-publisher.ts";
-import { OrderStatus } from "../../src/domain/orders-entity.ts";
-import { InvalidOrderAmountError } from "../../src/domain/errors.ts";
+import { OrderStatus } from "../../src/domain/order/order-entity.ts";
+import { InvalidOrderAmountError } from "../../src/domain/order/errors.ts";
 
 function makeCustomer() {
   return CustomerEntity.restore({

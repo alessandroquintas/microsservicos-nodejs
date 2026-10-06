@@ -1,7 +1,7 @@
 import type { CustomersRepository } from "../../domain/customer/customers-repository.ts";
 import { CustomerNotFoundError } from "../../domain/customer/errors.ts";
-import { OrderEntity } from "../../domain/orders-entity.ts";
-import type { OrdersRepository } from "../../domain/orders-repository.ts";
+import { OrderEntity } from "../../domain/order/order-entity.ts";
+import type { OrdersRepository } from "../../domain/order/orders-repository.ts";
 import { Money } from "../../domain/shared/money.ts";
 import type { OrderEventsPublisher } from "../ports/order-events-publisher.ts";
 

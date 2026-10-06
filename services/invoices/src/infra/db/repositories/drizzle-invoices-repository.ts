@@ -1,5 +1,5 @@
-import type { InvoiceEntity } from "../../../domain/invoices-entity.ts";
-import type { InvoicesRepository } from "../../../domain/invoices-repository.ts";
+import type { InvoiceEntity } from "../../../domain/invoice/invoice-entity.ts";
+import type { InvoicesRepository } from "../../../domain/invoice/invoices-repository.ts";
 import { db as database } from "../client.ts";
 import { schema } from "../schema/index.ts";
 

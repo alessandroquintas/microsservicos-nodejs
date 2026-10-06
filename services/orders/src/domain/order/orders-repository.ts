@@ -1,4 +1,4 @@
-import type { OrderEntity } from "./orders-entity.ts";
+import type { OrderEntity } from "./order-entity.ts";
 
 export interface OrdersRepository {
   save(order: OrderEntity): Promise<void>;

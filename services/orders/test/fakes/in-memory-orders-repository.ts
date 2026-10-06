@@ -1,5 +1,5 @@
-import type { OrderEntity } from "../../src/domain/orders-entity.ts";
-import type { OrdersRepository } from "../../src/domain/orders-repository.ts";
+import type { OrderEntity } from "../../src/domain/order/order-entity.ts";
+import type { OrdersRepository } from "../../src/domain/order/orders-repository.ts";
 
 export class InMemoryOrdersRepository implements OrdersRepository {
   items: OrderEntity[] = [];

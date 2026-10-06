@@ -1,5 +1,5 @@
-import type { OrderEntity } from "../../../domain/orders-entity.ts";
-import type { OrdersRepository } from "../../../domain/orders-repository.ts";
+import type { OrderEntity } from "../../../domain/order/order-entity.ts";
+import type { OrdersRepository } from "../../../domain/order/orders-repository.ts";
 import { db as database } from "../client.ts";
 import { schema } from "../schema/index.ts";
 

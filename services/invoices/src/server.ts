@@ -2,7 +2,7 @@ import "@opentelemetry/auto-instrumentations-node/register";
 
 import "./infra/messaging/subscriber.ts";
 
-import { app } from "./infra/http/app.ts";
+import { buildApp } from "./infra/http/app.ts";
 import { CreateInvoiceFromOrderUseCase } from "./application/use-cases/create-invoice-from-order.ts";
 import { DrizzleInvoicesRepository } from "./infra/db/repositories/drizzle-invoices-repository.ts";
 import { db } from "./infra/db/client.ts";
@@ -20,6 +20,8 @@ const createInvoiceFromOrder = new CreateInvoiceFromOrderUseCase(
 // Adapters de entrada
 const handleOrderCreated = createOrderCreatedHandler(createInvoiceFromOrder);
 await startOrderCreatedConsumer(ordersChannel, handleOrderCreated);
+
+const app = buildApp();
 
 app
   .listen({ host: "0.0.0.0", port: Number(process.env.PORT ?? 3334) })

@@ -1,6 +1,6 @@
 import type { ConsumeMessage } from "amqplib";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { createOrderCreatedHandler } from "../src/infra/messaging/handlers/order-created.handler.ts";
+import { createOrderCreatedHandler } from "../../../src/infra/messaging/handlers/order-created.handler.ts";
 import { randomUUID } from "node:crypto";
 import type { OrderCreatedMessage } from "@microservices/contracts";
 

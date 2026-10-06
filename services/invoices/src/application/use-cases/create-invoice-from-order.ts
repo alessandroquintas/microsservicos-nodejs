@@ -1,5 +1,5 @@
-import { InvoiceEntity } from "../../domain/invoices-entity.ts";
-import type { InvoicesRepository } from "../../domain/invoices-repository.ts";
+import { InvoiceEntity } from "../../domain/invoice/invoice-entity.ts";
+import type { InvoicesRepository } from "../../domain/invoice/invoices-repository.ts";
 
 type CreateInvoiceFromOrderUseCaseArgs = {
   orderId: string;

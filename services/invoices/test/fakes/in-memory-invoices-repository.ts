@@ -1,5 +1,5 @@
-import type { InvoiceEntity } from "../../src/domain/invoices-entity.ts";
-import type { InvoicesRepository } from "../../src/domain/invoices-repository.ts";
+import type { InvoiceEntity } from "../../src/domain/invoice/invoice-entity.ts";
+import type { InvoicesRepository } from "../../src/domain/invoice/invoices-repository.ts";
 
 export class InMemoryInvoicesRepository implements InvoicesRepository {
   items: InvoiceEntity[] = [];

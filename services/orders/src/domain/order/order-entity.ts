@@ -4,7 +4,7 @@ import {
   InvalidOrderAmountError,
   InvalidOrderStatusTransitionError,
 } from "./errors.ts";
-import type { Money } from "./shared/money.ts";
+import type { Money } from "../shared/money.ts";
 
 export const OrderStatus = {
   PENDING: "pending",

@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, afterAll, beforeEach } from "vitest";
-import { CustomerNotFoundError } from "../src/domain/customer/errors.ts";
-import { buildApp } from "../src/infra/http/app.ts";
+import { CustomerNotFoundError } from "../../../src/domain/customer/errors.ts";
+import { buildApp } from "../../../src/infra/http/app.ts";
 
 const createOrder = { execute: vi.fn() };
 const app = buildApp({ createOrder });

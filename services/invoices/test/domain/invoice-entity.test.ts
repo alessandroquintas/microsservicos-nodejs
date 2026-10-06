@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { InvoiceEntity } from "../../src/domain/invoices-entity.ts";
-import { InvalidOrderIdError } from "../../src/domain/errors.ts";
+import { InvoiceEntity } from "../../src/domain/invoice/invoice-entity.ts";
+import { InvalidOrderIdError } from "../../src/domain/invoice/errors.ts";
 
 describe("InvoiceEntity", () => {
   it("creates an invoice with a generated id", () => {
