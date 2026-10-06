@@ -58,4 +58,21 @@ describe("POST /orders", () => {
 
     expect(response.statusCode).toBe(404);
   });
+
+  it("returns a generic 500 without leaking internal details", async () => {
+    createOrder.execute.mockRejectedValueOnce(
+      new Error('Failed query: select "id" from "customers"'),
+    );
+    vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/orders",
+      payload: { amount: 100 },
+    });
+
+    expect(response.statusCode).toBe(500);
+    expect(response.json()).toEqual({ message: "Internal server error" });
+    expect(response.body).not.toContain("select");
+  });
 });

@@ -17,11 +17,41 @@ type AppDependencies = {
   createOrder: Pick<CreateOrderUseCase, "execute">;
 };
 
+function getStatusCode(error: unknown): number {
+  if (
+    typeof error === "object" &&
+    error !== null &&
+    "statusCode" in error &&
+    typeof error.statusCode === "number"
+  ) {
+    return error.statusCode;
+  }
+
+  return 500;
+}
+
 export function buildApp({ createOrder }: AppDependencies) {
   const app = fastify().withTypeProvider<ZodTypeProvider>();
 
   app.setSerializerCompiler(serializerCompiler);
   app.setValidatorCompiler(validatorCompiler);
+
+  app.setErrorHandler((error, request, reply) => {
+    const statusCode = getStatusCode(error);
+
+    if (statusCode < 500) {
+      const message = error instanceof Error ? error.message : "Bad request";
+      return reply.status(statusCode).send({ message });
+    }
+
+    console.error("Unhandled error", {
+      method: request.method,
+      url: request.url,
+      error,
+    });
+
+    return reply.status(500).send({ message: "Internal server error" });
+  });
 
   app.register(fastifyCors, { origin: "*" });
 
