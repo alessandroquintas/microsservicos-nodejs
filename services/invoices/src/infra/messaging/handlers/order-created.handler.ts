@@ -20,7 +20,10 @@ export function createOrderCreatedHandler(
 
       if (!result.success) {
         console.warn("Invalid OrderCreated message, discarding", {
-          issues: result.error.issues,
+          issues: result.error.issues.map((issue) => ({
+            path: issue.path.join("."),
+            message: issue.message,
+          })),
         });
         channel.nack(message, false, false);
         return;

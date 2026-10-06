@@ -7,4 +7,8 @@ export class InMemoryInvoicesRepository implements InvoicesRepository {
   async save(invoice: InvoiceEntity): Promise<void> {
     this.items.push(invoice);
   }
+
+  async findByOrderId(orderId: string): Promise<InvoiceEntity | null> {
+    return this.items.find((invoice) => invoice.orderId === orderId) ?? null;
+  }
 }

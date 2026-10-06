@@ -1,0 +1,1 @@
+ALTER TABLE "invoices" ADD CONSTRAINT "invoices_orderId_unique" UNIQUE("order_id");

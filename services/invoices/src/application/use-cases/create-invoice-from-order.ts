@@ -15,6 +15,12 @@ export class CreateInvoiceFromOrderUseCase {
   async execute(args: CreateInvoiceFromOrderUseCaseArgs) {
     const { orderId } = args;
 
+    const existing = await this.#invoicesRepository.findByOrderId(orderId);
+
+    if (existing) {
+      return existing;
+    }
+
     const invoice = InvoiceEntity.create({ orderId });
 
     await this.#invoicesRepository.save(invoice);
