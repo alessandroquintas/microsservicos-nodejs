@@ -18,4 +18,12 @@ describe("CreateInvoiceFromOrderUseCase", () => {
     expect(invoicesRepository.items).toHaveLength(1);
     expect(invoicesRepository.items[0]).toBe(invoice);
   });
+
+  it("does not create a second invoice for the same orderId", async () => {
+    const first = await sut.execute({ orderId: "order-1" });
+    const second = await sut.execute({ orderId: "order-1" });
+
+    expect(second.id).toBe(first.id);
+    expect(invoicesRepository.items).toHaveLength(1);
+  });
 });
