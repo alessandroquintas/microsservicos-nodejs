@@ -9,7 +9,9 @@
     "dev": "node --env-file=.env --experimental-strip-types --watch --no-warnings src/server.ts",
     "start": "node --experimental-strip-types --no-warnings src/server.ts",
     "db:migrate": "drizzle-kit migrate",
+    "db:generate": "drizzle-kit generate",
     "db:migrate:test": "node --env-file=.env.test ../../node_modules/.bin/drizzle-kit migrate",
+    "db:studio": "drizzle-kit studio --port 4984",
     "typecheck": "tsc --noEmit"
   },
   "keywords": [],
