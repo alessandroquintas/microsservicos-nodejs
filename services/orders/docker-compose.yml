@@ -10,3 +10,12 @@ services:
       - POSTGRES_DB=orders
     volumes:
       - ./docker:/docker-entrypoint-initdb.d
+      - orders_pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U docker"]
+      interval: 2s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  orders_pg_data:

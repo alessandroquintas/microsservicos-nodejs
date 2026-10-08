@@ -445,7 +445,8 @@ Fakes e test doubles ficam em `test/fakes/`: os repositórios in-memory (`in-mem
   - orders: `postgresql://docker:docker@127.0.0.1:5482/orders_test`
   - invoices: `postgresql://docker:docker@127.0.0.1:5483/invoices_test`
 - Os bancos `orders_test` / `invoices_test` são criados pelos scripts `services/*/docker/create-test-database.sql`, montados em `/docker-entrypoint-initdb.d` no `docker-compose.yml` de cada serviço. O script só roda quando o volume do Postgres é criado pela primeira vez.
-- As migrations de teste rodam com `npm run db:migrate:test`, que é `node --env-file=.env.test ../../node_modules/.bin/drizzle-kit migrate`.
+- `test/global-setup.ts` (registrado em `globalSetup` no `vitest.config.ts`) roda uma vez antes dos testes: carrega o `.env.test`, aplica as migrations de `src/infra/db/migrations` com `migrate` de `drizzle-orm/node-postgres/migrator` e fecha a conexão. Por isso, `npm test` só precisa do Postgres no ar.
+- `npm run db:migrate:test` (`node --env-file=.env.test ../../node_modules/.bin/drizzle-kit migrate`) continua disponível para migrar o banco de teste à mão.
 
 ### 6.3 Como rodar
 
@@ -463,7 +464,7 @@ npm run typecheck -w @microservices/orders
 cd services/orders && npx vitest run test/domain/money.test.ts
 ```
 
-Para os testes de banco passarem, o Postgres do serviço precisa estar rodando e migrado (ver [7](#7-desenvolvimento-local)).
+Para os testes de banco passarem, o Postgres do serviço precisa estar rodando (ver [7](#7-desenvolvimento-local)). As migrations são aplicadas pelo `globalSetup`.
 
 ### 6.4 CI
 
@@ -473,8 +474,7 @@ Para os testes de banco passarem, o Postgres do serviço precisa estar rodando e
 2. `actions/setup-node@v4` com Node 22 e cache do npm.
 3. `npm ci`
 4. `npm run typecheck`
-5. `npm run db:migrate:test -w @microservices/orders` e `npm run db:migrate:test -w @microservices/invoices`
-6. `npm test`
+5. `npm test`, que aplica as migrations de teste pelo `globalSetup`
 
 O CI não sobe RabbitMQ nem Kong e não faz build de imagens Docker nem deploy.
 
@@ -513,11 +513,13 @@ O Kong é construído a partir de `docker/kong` e encaminha para `http://host.do
 **3. Postgres de cada serviço**
 
 ```bash
-docker compose -f services/orders/docker-compose.yml up -d     # projeto app-orders, porta 5482
-docker compose -f services/invoices/docker-compose.yml up -d   # projeto app-invoices, porta 5483
+docker compose -f services/orders/docker-compose.yml up -d --wait     # projeto app-orders, porta 5482
+docker compose -f services/invoices/docker-compose.yml up -d --wait   # projeto app-invoices, porta 5483
 ```
 
-Cada compose monta `services/<serviço>/docker` em `/docker-entrypoint-initdb.d`. Assim, o script `create-test-database.sql` cria o banco `orders_test` / `invoices_test` ao lado do banco principal. Ele só roda na primeira inicialização do volume de dados.
+- Cada Postgres tem um `healthcheck` (`pg_isready -U docker`, a cada 2s, até 10 vezes). Com `--wait`, o comando só volta quando o banco está pronto para conexões.
+- Os dados ficam nos volumes nomeados `app-orders_orders_pg_data` e `app-invoices_invoices_pg_data` (montados em `/var/lib/postgresql/data`). Eles sobrevivem a `docker compose down` e à recriação do container. **`docker compose down -v` apaga os volumes**, e com eles os dados.
+- Cada compose também monta `services/<serviço>/docker` em `/docker-entrypoint-initdb.d`. Assim, o script `create-test-database.sql` cria o banco `orders_test` / `invoices_test` ao lado do banco principal. Ele só roda quando o volume é criado (o primeiro `up`, ou depois de um `down -v`).
 
 **4. Arquivos `.env`**
 
@@ -530,35 +532,26 @@ Os `.env.test` já estão versionados e não precisam ser criados.
 
 **5. Migrations de dev**
 
-O script `npm run db:migrate` (`drizzle-kit migrate`) **não** carrega o `.env`, e o `drizzle.config.ts` lança erro sem `DATABASE_URL`. Rode o drizzle-kit com `--env-file`, de dentro de cada serviço, como o `db:migrate:test` já faz:
+O script `npm run db:migrate` (`drizzle-kit migrate`) **não** carrega o `.env`, e o `drizzle.config.ts` lança erro sem `DATABASE_URL`. Passe a URL no ambiente:
 
 ```bash
-cd services/orders
-node --env-file=.env ../../node_modules/.bin/drizzle-kit migrate
-cd ../invoices
-node --env-file=.env ../../node_modules/.bin/drizzle-kit migrate
-cd ../..
+DATABASE_URL=postgresql://docker:docker@127.0.0.1:5482/orders npm run db:migrate -w @microservices/orders
+DATABASE_URL=postgresql://docker:docker@127.0.0.1:5483/invoices npm run db:migrate -w @microservices/invoices
 ```
 
-**6. Migrations de teste**
+Os bancos de teste não precisam de migration manual: os testes aplicam as migrations sozinhos (ver [6.2](#62-envtest-e-testsetupts)).
+
+**6. Seed do orders**
 
 ```bash
-npm run db:migrate:test -w @microservices/orders
-npm run db:migrate:test -w @microservices/invoices
+npm run db:seed -w @microservices/orders
 ```
 
-**7. Customer padrão**
+- `POST /orders` usa o cliente fixo `DEFAULT_CUSTOMER_ID` (`services/orders/src/infra/db/default-customer.ts`, importado pela rota e pelo seed).
+- O seed (`src/infra/db/seed.ts`, lê o `.env`) insere esse cliente (John Doe, `johndoe@example.com`) com `onConflictDoNothing()`, então pode rodar de novo sem erro.
+- Rode de novo só depois de um `down -v`, porque o volume nomeado mantém o cliente entre recriações do container.
 
-`POST /orders` usa o cliente fixo `DEFAULT_CUSTOMER_ID = "5961a952-0d3e-465f-b635-4b93a1cefa97"` (`services/orders/src/infra/http/app.ts`). Como não existe seed, insira o cliente manualmente no banco `orders`:
-
-```bash
-docker compose -f services/orders/docker-compose.yml exec orders-pg \
-  psql -U docker -d orders -c "INSERT INTO customers (id, name, email, address, state, zip_code, country) VALUES ('5961a952-0d3e-465f-b635-4b93a1cefa97', 'John Doe', 'johndoe@example.com', 'Rua das Flores, 123', 'PR', '80000-000', 'Brazil') ON CONFLICT (id) DO NOTHING;"
-```
-
-- As colunas seguem a migration `0000_aromatic_queen_noir.sql`. `date_of_birth` é a única coluna opcional.
-- O `ON CONFLICT (id) DO NOTHING` deixa o comando seguro para rodar de novo.
-- `name` e `email` precisam passar no `orderCreatedMessageSchema` (`name` não vazio, `email` válido). Caso contrário, o `parse` do outbox lança, a transação é desfeita e a rota responde 500.
+**7.** (Opcional) `npm run db:migrate:test -w <workspace>` ainda existe para migrar o banco de teste sem rodar os testes.
 
 **8. Serviços** (um terminal para cada)
 
@@ -739,7 +732,7 @@ Checklist na ordem em que o trabalho deve ser feito. Pule os passos que a featur
    - Rota em `src/infra/http/app.ts`, recebendo o use case como `Pick<XxxUseCase, "execute">`. Teste em `test/infra/http/` com `app.inject`.
    - Ou handler de mensagem em `src/infra/messaging/handlers/`, validando `payload.data` com `safeParse` e lançando `InvalidMessageError` se falhar. O handler não faz ack/nack: registre-o com `startConsumer`, e declare as filas (principal, retry, DLQ) e o bind em `topology.ts`. Teste em `test/infra/messaging/` sem canal. O consumidor precisa ser idempotente.
 7. **Ligar no `server.ts`**: instancie o adapter concreto, depois o use case, e passe o use case para o adapter de entrada. O import do OpenTelemetry continua na primeira linha.
-8. **Migration**: gere com `drizzle-kit generate` (ver [7.6](#76-migrations)) e aplique no banco de dev e no de teste (`npm run db:migrate:test -w <workspace>`). O CI aplica as migrations de teste antes do `npm test`.
+8. **Migration**: gere com `drizzle-kit generate` (ver [7.6](#76-migrations)) e aplique no banco de dev (ver [7.2](#72-passo-a-passo-do-zero)). No banco de teste, o `globalSetup` do Vitest aplica a migration sozinho, localmente e no CI.
 
 No fim, rode `npm run typecheck` e `npm test` na raiz.
 
@@ -749,7 +742,7 @@ No fim, rode `npm run typecheck` e `npm test` na raiz.
 
 Esta seção só descreve o comportamento atual. Não há propostas de solução aqui.
 
-- **Customer fixo.** Todo `POST /orders` usa `DEFAULT_CUSTOMER_ID` (`5961a952-0d3e-465f-b635-4b93a1cefa97`), definido em `services/orders/src/infra/http/app.ts` com o comentário "Temporário: até a feature de customers". Não existe cadastro de clientes nem seed. O body aceita só `amount`.
+- **Customer fixo.** Todo `POST /orders` usa `DEFAULT_CUSTOMER_ID` (`5961a952-0d3e-465f-b635-4b93a1cefa97`), definido em `services/orders/src/infra/http/app.ts` com o comentário "Temporário: até a feature de customers" (`services/orders/src/infra/db/default-customer.ts`). Não existe cadastro de clientes: o cliente vem do `npm run db:seed`. O body aceita só `amount`.
 - **Eventos sem bind são descartados.** A exchange `events` é topic. Um evento publicado antes de existir uma fila ligada à routing key dele é descartado pelo RabbitMQ, mesmo com o confirm do publisher. O outbox o marca como publicado.
 - **Sem reconexão dentro do processo.** Se a conexão com o RabbitMQ cair, o serviço sai com código 1 e depende do orquestrador (ECS, política de restart do container) para voltar. No `npm run dev` local, o processo fica parado até ser reiniciado.
 - **Logs com `console`.** O logging é feito com `console.log`, `console.warn` e `console.error`:
@@ -777,7 +770,7 @@ Itens encontrados durante a leitura do código e ainda não resolvidos. Os itens
 4. **Error handler só no orders.** Os dois serviços agora usam `buildApp()`, mas só o do orders configura `setErrorHandler`, que esconde os detalhes de erros 500. O `buildApp()` do invoices não configura error handler e não recebe dependências, porque só expõe `/health`.
 5. **Kong roteia `/invoices`, mas o invoices não tem rota `/invoices`**, só `/health`. O `/health` dos serviços também não é exposto pelo Kong.
 6. **CORS configurado duas vezes**: no plugin `cors` do Kong e no `@fastify/cors` (`origin: "*"`) de cada serviço.
-7. **Cliente fixo na rota** (`DEFAULT_CUSTOMER_ID`, marcado como temporário no código) e nenhum seed para criá-lo.
+7. **Cliente fixo na rota** (`DEFAULT_CUSTOMER_ID`, marcado como temporário no código), criado pelo `npm run db:seed`.
 8. **O domínio importa `node:crypto`.** A regra "domain não importa nada de fora" vale para pacotes de terceiros e outras camadas. Os módulos built-in do Node são usados (`randomUUID`).
 9. **Validação de `orderId` diferente de `customerId`.** `InvoiceEntity.create` usa `orderId?.trim()` (optional chaining) e `OrderEntity.create` usa `customerId.trim()`.
 10. **O invoice guarda só `orderId`.** O valor (`amount`) e o cliente vêm na mensagem e são ignorados. A tabela `invoices` não tem `amount` nem `created_at`.

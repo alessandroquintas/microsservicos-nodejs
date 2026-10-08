@@ -9,9 +9,7 @@ import {
 } from "fastify-type-provider-zod";
 import type { CreateOrderUseCase } from "../../application/use-cases/create-order.ts";
 import { CustomerNotFoundError } from "../../domain/customer/errors.ts";
-
-// Temporário: até a feature de customers, todo pedido usa este customer.
-const DEFAULT_CUSTOMER_ID = "5961a952-0d3e-465f-b635-4b93a1cefa97";
+import { DEFAULT_CUSTOMER_ID } from "../db/default-customer.ts";
 
 type AppDependencies = {
   createOrder: Pick<CreateOrderUseCase, "execute">;
