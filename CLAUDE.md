@@ -1,81 +1,59 @@
 # CLAUDE.md
 
-Guia rápido para trabalhar neste repositório. A explicação completa está em [ARCHITECTURE.md](ARCHITECTURE.md).
+Guia rápido para trabalhar neste repositório. Os detalhes estão em [ARCHITECTURE.md](ARCHITECTURE.md).
 
 ## O que é
 
-Monorepo (npm workspaces) com dois microsserviços Node.js + TypeScript:
+Monorepo (npm workspaces), Node.js + TypeScript (Fastify 5, Drizzle/pg, amqplib, zod 4, Vitest, OpenTelemetry):
 
-- `services/orders` (`@microservices/orders`, :3333): `POST /orders` → Postgres (:5482) → publica `OrderCreated` na fila `orders-queue` (RabbitMQ).
-- `services/invoices` (`@microservices/invoices`, :3334): consome `orders-queue` → cria invoice no Postgres (:5483).
-- `packages/contracts` (`@microservices/contracts`): schemas zod das mensagens (`orderCreatedMessageSchema`, `OrderCreatedMessage`).
-- `docker/kong`: API Gateway (:8000). `infra/`: Pulumi/AWS, **fora** dos workspaces, com lockfile próprio.
-
-Stack: Fastify 5 + `fastify-type-provider-zod`, Drizzle ORM (pg), amqplib, zod 4, Vitest, OpenTelemetry.
+- `services/orders` (:3333, Postgres :5482): `POST /orders` grava pedido + evento em `outbox_events` na mesma transação; o `OutboxRelay` publica na exchange topic `events` (routing key `order.created`) com publisher confirms.
+- `services/invoices` (:3334, Postgres :5483): consome `invoices.order-created` (retry 3× com 5s, depois DLQ) e cria a invoice de forma idempotente.
+- `packages/contracts`: schemas zod das mensagens, `EVENTS_EXCHANGE` e as routing keys. `docker/kong`: gateway (:8000). `infra/`: Pulumi, **fora** dos workspaces.
 
 ## Comandos
 
 ```bash
-npm install                                   # na raiz
-npm test                                      # todos os workspaces
-npm run typecheck                             # tsc --noEmit em todos os workspaces
-npm test -w @microservices/orders             # um workspace
-npm run dev -w @microservices/orders          # node --experimental-strip-types --watch, lê .env
-npm run db:migrate:test -w @microservices/orders   # migra o banco *_test (.env.test)
-cd services/orders && npx vitest run test/domain/money.test.ts   # um arquivo
-
-docker compose up -d                                        # RabbitMQ, Jaeger, Kong
-docker compose -f services/orders/docker-compose.yml up -d  # Postgres do orders (+ orders_test)
-docker compose -f services/invoices/docker-compose.yml up -d
+npm install && npm run typecheck && npm test        # na raiz
+npm test -w @microservices/orders                   # um workspace
+npm run dev -w @microservices/invoices              # suba o invoices antes do orders (cria filas e bind)
+npm run db:migrate:test -w @microservices/orders    # migra o banco *_test
+docker compose up -d                                # RabbitMQ, Jaeger, Kong
+docker compose -f services/orders/docker-compose.yml up -d
 ```
 
-Os testes em `test/infra/db/` precisam do Postgres do serviço rodando e migrado. Os outros testes não precisam de banco nem de RabbitMQ.
+Os testes em `test/infra/db/` e o do relay precisam do Postgres do serviço rodando e migrado. Nenhum teste precisa de RabbitMQ. Antes de concluir uma mudança, rode `npm run typecheck` e `npm test` (é o que o CI roda).
 
-Antes de concluir uma mudança, rode `npm run typecheck` e `npm test`. O CI (`.github/workflows/ci.yml`) roda exatamente isso, depois das migrations de teste.
+## Arquitetura hexagonal
 
-## Arquitetura hexagonal: regras
-
-```
-src/domain/       uma subpasta por agregado (order/, customer/, invoice/) + shared/
-src/application/  use-cases/ (classe com execute(args)) e ports/ (interfaces não-persistência)
-src/infra/        adapters: db/ (Drizzle), http/ (Fastify), messaging/ (amqplib)
-src/server.ts     composition root: o único lugar que instancia adapters concretos
-```
-
-- `domain` não importa de `application`, `infra` nem de pacotes de terceiros (só built-ins como `node:crypto`).
-- `application` importa só de `domain` e tipos de `@microservices/contracts`.
-- `infra` implementa as portas (`DrizzleOrdersRepository implements OrdersRepository`). Os adapters de entrada recebem o use case como `Pick<XUseCase, "execute">`, para os testes injetarem `{ execute: vi.fn() }`.
-- Nova dependência de um use case: crie a interface (repositório em `domain/<agregado>/`, outras em `application/ports/`), o adapter em `infra/`, um fake em `test/fakes/`, e faça a ligação em `server.ts`.
-- Mudança no formato de uma mensagem: altere o schema em `packages/contracts`. O publisher valida com `.parse` antes de enviar, e o consumer valida `payload.data` com `.safeParse` e faz `nack(msg, false, false)` se falhar. O envelope é sempre `{ data: <mensagem> }`.
+- `src/domain/<agregado>/` (+ `shared/`): não importa de `application`, `infra` nem de pacotes de terceiros (só built-ins como `node:crypto`).
+- `src/application/`: `use-cases/` (classe com `execute(args)`) e `ports/`. Importa só de `domain` e tipos de `@microservices/contracts`.
+- `src/infra/`: adapters (`db/`, `http/`, `messaging/`). Adapters de entrada recebem `Pick<XUseCase, "execute">`.
+- `src/server.ts`: composition root, o único lugar que instancia adapters concretos.
+- Nova dependência de use case: interface (repositório em `domain/<agregado>/`, outras em `application/ports/`), adapter em `infra/`, fake em `test/fakes/`, ligação no `server.ts`.
+- Mensagens: o schema fica em `packages/contracts`, o envelope é sempre `{ data }`. O orders publica só pelo outbox. No invoices, o handler só lança (`InvalidMessageError` para mensagem inválida) e o `startConsumer` decide ack/retry/DLQ. O invoices declara as próprias filas em `topology.ts`. Ver ARCHITECTURE.md §4.
 
 ## Convenções obrigatórias
 
-O código roda com `node --experimental-strip-types`, sem build:
+Roda com `node --experimental-strip-types`, sem build:
 
-- **Sem `enum`.** Use objeto `as const` + type derivado (ver `OrderStatus` em `services/orders/src/domain/order/order-entity.ts`).
-- **Sem parameter properties** (`constructor(private x: X)`) e sem `namespace`.
-- **Imports relativos com extensão `.ts`**: `import { Money } from "./shared/money.ts"`.
-- **`import type`** (ou `type` inline) para tudo que é só tipo. O `verbatimModuleSyntax` exige isso.
+- **Sem `enum`** (use `as const` + type derivado), **sem parameter properties**, sem `namespace`.
+- **Imports relativos com extensão `.ts`** e **`import type`** para tudo que é só tipo (`verbatimModuleSyntax`).
 
-Estilo do código existente:
+Estilo:
 
-- Entidades com `private constructor`, `static create(...)` (valida, gera `randomUUID()`) e `static restore(props)` (reidrata, sem validar).
-- Estado mutável e dependências injetadas em campos privados `#` (`#status`, `#ordersRepository`). Dados imutáveis em `readonly`.
-- Dinheiro sempre em **centavos inteiros**, com o value object `Money` (`Money.fromCents`, `.cents`, `.isZero()`). No banco e nas mensagens, `amount` é o número em centavos.
-- Erros de domínio: `class XxxError extends Error` com `this.name = "XxxError"`, em `domain/<agregado>/errors.ts`.
-- Nomes: `XxxEntity`, `XxxsRepository` (interface), `DrizzleXxxsRepository`, `InMemoryXxxsRepository`, `FakeXxx`, `XxxUseCase`. Arquivos em kebab-case. No domínio: `domain/<agregado>/<agregado>-entity.ts` (singular), `domain/<agregado>/<plural>-repository.ts` (plural) e `domain/<agregado>/errors.ts`. Ex.: `domain/order/order-entity.ts`, `domain/order/orders-repository.ts`.
-- Testes: `sut` para o objeto testado, fakes in-memory com array público (`items`, `published`).
-- Cada workspace declara no próprio `package.json` todas as dependências que importa. Não dependa do hoisting.
-
-## Testes
-
-- Vitest, `test/setup.ts` carrega `.env.test` (`process.loadEnvFile`), `fileParallelism: false`.
-- `test/` espelha o `src/` nos dois serviços: `test/domain/`, `test/application/`, `test/infra/db/` (banco real, limpa as tabelas no `beforeEach`, `db.$client.end()` no `afterAll`), `test/infra/http/` (`buildApp(...)` + `app.inject`), `test/infra/messaging/` (publisher com canal `{ sendToQueue }` fake, handler com canal `{ ack, nack }` fake) e `test/fakes/` (repositórios in-memory e publisher falso).
+- Entidades com `private constructor`, `static create(...)` (valida, gera `randomUUID()`) e `static restore(props)`.
+- Estado mutável e dependências em campos `#`; dados imutáveis em `readonly`.
+- Dinheiro em **centavos inteiros** com `Money`; no banco e nas mensagens, `amount` em centavos.
+- Erros: `class XxxError extends Error` com `this.name = "XxxError"`, em `domain/<agregado>/errors.ts`.
+- Nomes: `XxxEntity`, `XxxsRepository`, `DrizzleXxxsRepository`, `InMemoryXxxsRepository`, `FakeXxx`, `XxxUseCase`; arquivos em kebab-case (`domain/order/order-entity.ts`, `domain/order/orders-repository.ts`).
+- Testes: `sut` para o objeto testado, fakes in-memory com array público; `test/` espelha `src/`.
+- Cada workspace declara no próprio `package.json` todas as dependências que importa.
 
 ## Cuidados
 
-- O import de `@opentelemetry/auto-instrumentations-node/register` precisa continuar sendo a **primeira linha** de cada `server.ts`.
-- `client.ts` do db e do broker lançam erro no import se `DATABASE_URL` / `BROKER_URL` não estiverem definidos, e o broker conecta com top-level await. Não importe esses módulos em testes que não precisam deles.
-- `POST /orders` usa um `DEFAULT_CUSTOMER_ID` fixo (temporário) que precisa existir na tabela `customers`.
-- `npm run db:migrate` não carrega o `.env`. Defina `DATABASE_URL` no ambiente.
-- A seção 11 do ARCHITECTURE.md lista as inconsistências conhecidas (por exemplo, error handler só no orders, import duplicado no `server.ts` do invoices). Não "corrija" esses pontos de passagem numa mudança não relacionada.
+- `@opentelemetry/auto-instrumentations-node/register` continua sendo a **primeira linha** de cada `server.ts`.
+- `infra/db/client.ts` e `infra/messaging/client.ts` exigem `DATABASE_URL` / `BROKER_URL` e conectam no import (top-level await, com retentativas no broker). Não importe esses módulos em testes que não precisam deles.
+- Os dois `server.ts` têm graceful shutdown (SIGTERM/SIGINT, timeout de 10s). Recurso novo com conexão ou trabalho em andamento precisa entrar na função `shutdown`. Ver ARCHITECTURE.md §3.6.
+- `POST /orders` usa um `DEFAULT_CUSTOMER_ID` fixo que precisa existir na tabela `customers` (insert manual, ver §7.2).
+- `npm run db:migrate` não carrega o `.env`: defina `DATABASE_URL` no ambiente.
+- A seção 11 do ARCHITECTURE.md lista inconsistências conhecidas. Não as "corrija" numa mudança não relacionada.

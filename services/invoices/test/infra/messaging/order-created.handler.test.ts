@@ -1,6 +1,7 @@
 import type { ConsumeMessage } from "amqplib";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createOrderCreatedHandler } from "../../../src/infra/messaging/handlers/order-created.handler.ts";
+import { InvalidMessageError } from "../../../src/infra/messaging/errors.ts";
 import { randomUUID } from "node:crypto";
 import type { OrderCreatedMessage } from "@microservices/contracts";
 
@@ -20,58 +21,47 @@ function validMessage(): OrderCreatedMessage {
   };
 }
 
-const channel = { ack: vi.fn(), nack: vi.fn() };
 const createInvoiceFromOrder = { execute: vi.fn() };
-const handleOrderCreated = createOrderCreatedHandler(createInvoiceFromOrder);
+const sut = createOrderCreatedHandler(createInvoiceFromOrder);
 
 beforeEach(() => {
   vi.clearAllMocks();
 });
 
 describe("handleOrderCreated", () => {
-  it("creates an invoice for the order and acks the message", async () => {
+  it("creates an invoice for the order", async () => {
     const data = validMessage();
-    const message = makeMessage(JSON.stringify({ data }));
 
-    await handleOrderCreated(message, channel);
+    await sut(makeMessage(JSON.stringify({ data })));
 
     expect(createInvoiceFromOrder.execute).toHaveBeenCalledWith({
       orderId: data.orderId,
     });
-    expect(channel.ack).toHaveBeenCalledWith(message);
-    expect(channel.nack).not.toHaveBeenCalled();
   });
 
-  it("nacks without requeue when the message does not match the contract", async () => {
-    const message = makeMessage(JSON.stringify({ data: {} }));
-
-    await handleOrderCreated(message, channel);
-
-    expect(createInvoiceFromOrder.execute).not.toHaveBeenCalled();
-    expect(channel.nack).toHaveBeenCalledWith(message, false, false);
-    expect(channel.ack).not.toHaveBeenCalled();
-  });
-
-  it("nacks without requeue when the message is not valid JSON", async () => {
-    const message = makeMessage("not-json");
-
-    await handleOrderCreated(message, channel);
-
-    expect(createInvoiceFromOrder.execute).not.toHaveBeenCalled();
-    expect(channel.nack).toHaveBeenCalledWith(message, false, false);
-    expect(channel.ack).not.toHaveBeenCalled();
-  });
-
-  it("nacks without requeue when creating the invoice fails", async () => {
-    createInvoiceFromOrder.execute.mockRejectedValueOnce(
-      new Error("database is down"),
+  it("throws InvalidMessageError when the message is not valid JSON", async () => {
+    await expect(sut(makeMessage("not-json"))).rejects.toBeInstanceOf(
+      InvalidMessageError,
     );
-    const message = makeMessage(JSON.stringify({ data: validMessage() }));
+    expect(createInvoiceFromOrder.execute).not.toHaveBeenCalled();
+  });
 
-    await handleOrderCreated(message, channel);
+  it("throws InvalidMessageError when the message does not match the contract", async () => {
+    const data = { ...validMessage(), orderId: "not-a-uuid" };
 
-    expect(createInvoiceFromOrder.execute).toHaveBeenCalled();
-    expect(channel.nack).toHaveBeenCalledWith(message, false, false);
-    expect(channel.ack).not.toHaveBeenCalled();
+    const promise = sut(makeMessage(JSON.stringify({ data })));
+
+    await expect(promise).rejects.toBeInstanceOf(InvalidMessageError);
+    await expect(promise).rejects.toThrow(/orderId/);
+    expect(createInvoiceFromOrder.execute).not.toHaveBeenCalled();
+  });
+
+  it("propagates the error when creating the invoice fails", async () => {
+    const error = new Error("database is down");
+    createInvoiceFromOrder.execute.mockRejectedValueOnce(error);
+
+    await expect(
+      sut(makeMessage(JSON.stringify({ data: validMessage() }))),
+    ).rejects.toBe(error);
   });
 });

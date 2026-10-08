@@ -7,6 +7,10 @@ import { buildApp } from "./infra/http/app.ts";
 import { DrizzleUnitOfWork } from "./infra/db/drizzle-unit-of-work.ts";
 import { OutboxRelay } from "./infra/messaging/outbox-relay.ts";
 import { ordersChannel } from "./infra/messaging/channels/orders.ts";
+import {
+  broker,
+  markBrokerShuttingDown,
+} from "./infra/messaging/client.ts";
 
 // Adapters de sáida
 const customersRepository = new DrizzleCustomersRepository(db);
@@ -26,3 +30,29 @@ app
   .then(() => {
     console.log("[Orders] HTTP Server running !");
   });
+
+let shuttingDown = false;
+
+async function shutdown(signal: NodeJS.Signals) {
+  if (shuttingDown) return;
+  shuttingDown = true;
+
+  console.log(`[Orders] ${signal} received, shutting down`);
+
+  setTimeout(() => {
+    console.error("[Orders] Forced shutdown");
+    process.exit(1);
+  }, 10_000).unref();
+
+  await app.close();
+  await outboxRelay.stop();
+  markBrokerShuttingDown();
+  await ordersChannel.close();
+  await broker.close();
+  await db.$client.end();
+
+  process.exit(0);
+}
+
+process.once("SIGTERM", shutdown);
+process.once("SIGINT", shutdown);

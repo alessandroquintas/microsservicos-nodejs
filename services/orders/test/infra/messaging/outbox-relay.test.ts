@@ -18,7 +18,7 @@ function validMessage() {
 }
 
 const outbox = new OutboxOrderEventsPublisher(db);
-const channel = { sendToQueue: vi.fn(), waitForConfirms: vi.fn() };
+const channel = { publish: vi.fn(), waitForConfirms: vi.fn() };
 const sut = new OutboxRelay(db, channel);
 
 beforeEach(async () => {
@@ -38,8 +38,9 @@ describe("OutboxRelay", () => {
     const published = await sut.publishPending();
 
     expect(published).toBe(1);
-    const [queue, content] = channel.sendToQueue.mock.calls[0];
-    expect(queue).toBe("orders-queue");
+    const [exchange, routingKey, content] = channel.publish.mock.calls[0];
+    expect(exchange).toBe("events");
+    expect(routingKey).toBe("order.created");
     expect(JSON.parse(content.toString())).toEqual({ data: message });
 
     const [row] = await db.select().from(schema.outboxEvents);
@@ -53,7 +54,7 @@ describe("OutboxRelay", () => {
     await sut.publishPending();
     await sut.publishPending();
 
-    expect(channel.sendToQueue).toHaveBeenCalledOnce();
+    expect(channel.publish).toHaveBeenCalledOnce();
   });
 
   it("keeps the event pending when the broker does not confirm", async () => {
@@ -85,5 +86,32 @@ describe("OutboxRelay", () => {
     expect(row.publishedAt).not.toBeNull();
     expect(row.attempts).toBe(2);
     expect(row.lastError).toBeNull();
+  });
+
+  it("waits for the running cycle on stop and starts no new cycle", async () => {
+    let confirm!: () => void;
+    channel.waitForConfirms.mockImplementationOnce(
+      () => new Promise<void>((resolve) => (confirm = resolve)),
+    );
+    await outbox.publishOrderCreated(validMessage());
+
+    sut.start(10);
+    await vi.waitFor(() => expect(channel.waitForConfirms).toHaveBeenCalled());
+
+    let stopped = false;
+    const stopping = sut.stop().then(() => (stopped = true));
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(stopped).toBe(false);
+
+    confirm();
+    await stopping;
+    expect(stopped).toBe(true);
+
+    const [row] = await db.select().from(schema.outboxEvents);
+    expect(row.publishedAt).not.toBeNull();
+
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(channel.publish).toHaveBeenCalledOnce();
+    expect(channel.waitForConfirms).toHaveBeenCalledOnce();
   });
 });
