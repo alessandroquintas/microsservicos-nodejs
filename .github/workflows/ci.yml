@@ -52,10 +52,5 @@ jobs:
       - name: Typecheck
         run: npm run typecheck
 
-      - name: Migrate test databases
-        run: |
-          npm run db:migrate:test -w @microservices/orders
-          npm run db:migrate:test -w @microservices/invoices
-
       - name: Test
         run: npm test

@@ -16,12 +16,12 @@ Monorepo (npm workspaces), Node.js + TypeScript (Fastify 5, Drizzle/pg, amqplib,
 npm install && npm run typecheck && npm test        # na raiz
 npm test -w @microservices/orders                   # um workspace
 npm run dev -w @microservices/invoices              # suba o invoices antes do orders (cria filas e bind)
-npm run db:migrate:test -w @microservices/orders    # migra o banco *_test
+npm run db:seed -w @microservices/orders            # customer padrão (idempotente)
 docker compose up -d                                # RabbitMQ, Jaeger, Kong
-docker compose -f services/orders/docker-compose.yml up -d
+docker compose -f services/orders/docker-compose.yml up -d --wait   # volume nomeado; down -v apaga os dados
 ```
 
-Os testes em `test/infra/db/` e o do relay precisam do Postgres do serviço rodando e migrado. Nenhum teste precisa de RabbitMQ. Antes de concluir uma mudança, rode `npm run typecheck` e `npm test` (é o que o CI roda).
+Os testes em `test/infra/db/` e o do relay precisam do Postgres do serviço rodando (o `globalSetup` do Vitest aplica as migrations). Nenhum teste precisa de RabbitMQ. Antes de concluir uma mudança, rode `npm run typecheck` e `npm test` (é o que o CI roda).
 
 ## Arquitetura hexagonal
 
@@ -54,6 +54,6 @@ Estilo:
 - `@opentelemetry/auto-instrumentations-node/register` continua sendo a **primeira linha** de cada `server.ts`.
 - `infra/db/client.ts` e `infra/messaging/client.ts` exigem `DATABASE_URL` / `BROKER_URL` e conectam no import (top-level await, com retentativas no broker). Não importe esses módulos em testes que não precisam deles.
 - Os dois `server.ts` têm graceful shutdown (SIGTERM/SIGINT, timeout de 10s). Recurso novo com conexão ou trabalho em andamento precisa entrar na função `shutdown`. Ver ARCHITECTURE.md §3.6.
-- `POST /orders` usa um `DEFAULT_CUSTOMER_ID` fixo que precisa existir na tabela `customers` (insert manual, ver §7.2).
+- `POST /orders` usa um `DEFAULT_CUSTOMER_ID` fixo que precisa existir na tabela `customers` (`npm run db:seed`).
 - `npm run db:migrate` não carrega o `.env`: defina `DATABASE_URL` no ambiente.
 - A seção 11 do ARCHITECTURE.md lista inconsistências conhecidas. Não as "corrija" numa mudança não relacionada.
