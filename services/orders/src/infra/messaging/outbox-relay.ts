@@ -1,15 +1,19 @@
 import type { ConfirmChannel } from "amqplib";
 import type { db as database } from "../db/client.ts";
 import { schema } from "../db/schema/index.ts";
-import { ORDER_CREATED_EVENT } from "@microservices/contracts";
+import {
+  EVENTS_EXCHANGE,
+  ORDER_CREATED_EVENT,
+  ORDER_CREATED_ROUTING_KEY,
+} from "@microservices/contracts";
 import { asc, eq, isNull } from "drizzle-orm";
 
 type Database = typeof database;
-type PublishChannel = Pick<ConfirmChannel, "sendToQueue" | "waitForConfirms">;
+type PublishChannel = Pick<ConfirmChannel, "publish" | "waitForConfirms">;
 type OutboxEvent = typeof schema.outboxEvents.$inferSelect;
 
-const QUEUE_BY_EVENT_TYPE: Record<string, string> = {
-  [ORDER_CREATED_EVENT]: "orders-queue",
+const ROUTING_KEY_BY_EVENT_TYPE: Record<string, string> = {
+  [ORDER_CREATED_EVENT]: ORDER_CREATED_ROUTING_KEY,
 };
 
 export class OutboxRelay {
@@ -18,6 +22,7 @@ export class OutboxRelay {
   #batchSize: number;
   #timer: NodeJS.Timeout | undefined;
   #running = false;
+  #currentTick: Promise<void> | undefined;
 
   constructor(
     db: Database,
@@ -83,27 +88,33 @@ export class OutboxRelay {
       }
 
       if (this.#running) {
-        this.#timer = setTimeout(tick, intervalMs);
+        this.#timer = setTimeout(() => {
+          this.#currentTick = tick();
+        }, intervalMs);
       }
     };
 
-    void tick();
+    this.#currentTick = tick();
   }
 
-  stop(): void {
+  async stop(): Promise<void> {
     this.#running = false;
     clearTimeout(this.#timer);
+    await this.#currentTick;
   }
 
   async #publish(event: OutboxEvent): Promise<void> {
-    const queue = QUEUE_BY_EVENT_TYPE[event.type];
+    const routingKey = ROUTING_KEY_BY_EVENT_TYPE[event.type];
 
-    if (!queue) {
-      throw new Error(`No queue configured for event type "${event.type}"`);
+    if (!routingKey) {
+      throw new Error(
+        `No routing key configured for event type "${event.type}"`,
+      );
     }
 
-    this.#channel.sendToQueue(
-      queue,
+    this.#channel.publish(
+      EVENTS_EXCHANGE,
+      routingKey,
       Buffer.from(JSON.stringify({ data: event.payload })),
       {
         persistent: true,

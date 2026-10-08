@@ -8,18 +8,18 @@ Este documento descreve a arquitetura **atual** do repositório `microservices-n
 
 O sistema tem dois microsserviços Node.js:
 
-- **orders** (`services/orders`): recebe `POST /orders`, cria o pedido no Postgres dele e publica a mensagem `OrderCreated` no RabbitMQ.
-- **invoices** (`services/invoices`): consome `OrderCreated` da fila e cria uma fatura (invoice) no Postgres dele.
+- **orders** (`services/orders`): recebe `POST /orders`, grava o pedido e o evento `OrderCreated` na mesma transação (outbox) e um relay publica o evento no RabbitMQ.
+- **invoices** (`services/invoices`): consome `OrderCreated` da fila `invoices.order-created` e cria uma fatura (invoice) no Postgres dele, de forma idempotente.
 
-Na frente fica um API Gateway Kong (`docker/kong`), que roteia `/orders` para o orders e `/invoices` para o invoices. Cada serviço tem o próprio banco Postgres. A comunicação entre os serviços é só assíncrona, pela fila `orders-queue`.
+Na frente fica um API Gateway Kong (`docker/kong`), que roteia `/orders` para o orders e `/invoices` para o invoices. Cada serviço tem o próprio banco Postgres. A comunicação entre os serviços é só assíncrona, pela exchange topic `events` do RabbitMQ (ver [4.2](#42-catálogo-de-eventos-e-topologia)).
 
 ```mermaid
 flowchart LR
     client([Cliente]) -->|POST /orders| kong[Kong<br/>:8000]
     kong -->|/orders| orders[orders<br/>Fastify :3333]
-    orders -->|INSERT orders| ordersdb[(Postgres orders<br/>:5482)]
-    orders -->|sendToQueue<br/>orders-queue| rabbit[[RabbitMQ<br/>:5672]]
-    rabbit -->|consume<br/>orders-queue| invoices[invoices<br/>Fastify :3334]
+    orders -->|INSERT orders + outbox_events| ordersdb[(Postgres orders<br/>:5482)]
+    orders -->|relay: publish<br/>events / order.created| rabbit[[RabbitMQ<br/>:5672]]
+    rabbit -->|consume<br/>invoices.order-created| invoices[invoices<br/>Fastify :3334]
     invoices -->|INSERT invoices| invoicesdb[(Postgres invoices<br/>:5483)]
     kong -.->|/invoices| invoices
 ```
@@ -88,7 +88,7 @@ Cada serviço segue a estrutura `src/{domain,application,infra}` + `src/server.t
 | Camada | O que pode conter | orders | invoices |
 | --- | --- | --- | --- |
 | `domain/` | Entidades, value objects, erros de domínio e as **interfaces de repositório** (portas de persistência), com uma subpasta por agregado. Código TypeScript puro. | `order/{order-entity.ts, orders-repository.ts, errors.ts}`, `customer/{customer-entity.ts, customers-repository.ts, errors.ts}`, `shared/money.ts` | `invoice/{invoice-entity.ts, invoices-repository.ts, errors.ts}` |
-| `application/` | Casos de uso (`use-cases/`) e portas que não são de persistência (`ports/`). Orquestra o domínio pelas interfaces. | `use-cases/create-order.ts`, `ports/order-events-publisher.ts` | `use-cases/create-invoice-from-order.ts` |
+| `application/` | Casos de uso (`use-cases/`) e portas que não são de persistência (`ports/`). Orquestra o domínio pelas interfaces. | `use-cases/create-order.ts`, `ports/order-events-publisher.ts`, `ports/unit-of-work.ts` | `use-cases/create-invoice-from-order.ts` |
 | `infra/` | Adapters: banco (Drizzle), HTTP (Fastify), mensageria (amqplib). Implementam as portas ou chamam os casos de uso. | `db/`, `http/app.ts`, `messaging/` | `db/`, `http/app.ts`, `messaging/` |
 | `server.ts` | Composition root: instancia adapters e use cases e liga tudo. | `src/server.ts` | `src/server.ts` |
 
@@ -98,8 +98,10 @@ Dentro de `infra/`, a organização é a mesma nos dois serviços:
 - `infra/db/schema/*.ts` + `schema/index.ts`: tabelas Drizzle, agregadas no objeto `schema`.
 - `infra/db/repositories/drizzle-*-repository.ts`: implementação das portas de repositório.
 - `infra/db/migrations/`: migrations geradas pelo drizzle-kit.
-- `infra/messaging/client.ts`: conexão AMQP (`amqp.connect(process.env.BROKER_URL)`, com top-level await).
-- `infra/messaging/channels/orders.ts`: cria o canal e faz `assertQueue("orders-queue")`.
+- `infra/messaging/client.ts`: conexão AMQP com top-level await, via `connectWithRetry(() => amqp.connect(BROKER_URL))` (`connect-with-retry.ts`). Exporta `broker` e `markBrokerShuttingDown()` (ver [3.6](#36-ciclo-de-vida-dos-serviços)).
+- `infra/messaging/channels/orders.ts`: cria o canal e declara a parte da topologia que cabe ao serviço. No orders, `createConfirmChannel()` + `assertExchange("events", "topic")`. No invoices, `createChannel()` + `setupTopology(channel)` (`topology.ts`).
+- Só no orders: `infra/db/drizzle-unit-of-work.ts`, `infra/db/outbox/outbox-order-events-publisher.ts` e `infra/messaging/outbox-relay.ts` (ver [4.4](#44-outbox-no-orders)).
+- Só no invoices: `infra/messaging/topology.ts`, `consumer.ts`, `errors.ts` (`InvalidMessageError`) e `handlers/order-created.handler.ts` (ver [4.3](#43-validação-retry-e-dlq)).
 - `infra/http/app.ts`: instância do Fastify com `fastify-type-provider-zod`.
 
 ### 3.2 Regra de dependência
@@ -112,7 +114,7 @@ infra  ──▶  application  ──▶  domain
 
 - **domain** não importa nada de `application`, de `infra` nem de bibliotecas de terceiros. A única importação externa é o built-in `node:crypto` (`randomUUID`) em `orders-entity.ts` e `invoices-entity.ts`.
 - **application** importa só de `domain` e, para as portas de eventos, tipos de `@microservices/contracts`. Exemplo: `application/ports/order-events-publisher.ts` faz `import type { OrderCreatedMessage } from "@microservices/contracts"`.
-- **infra** implementa as portas (`DrizzleOrdersRepository implements OrdersRepository`, `RabbitMQOrderEventsPublisher implements OrderEventsPublisher`) e, nos adapters de entrada, depende do caso de uso só pelo formato `Pick<UseCase, "execute">`:
+- **infra** implementa as portas (`DrizzleOrdersRepository implements OrdersRepository`, `OutboxOrderEventsPublisher implements OrderEventsPublisher`, `DrizzleUnitOfWork implements UnitOfWork`) e, nos adapters de entrada, depende do caso de uso só pelo formato `Pick<UseCase, "execute">`:
   - `services/orders/src/infra/http/app.ts`: `createOrder: Pick<CreateOrderUseCase, "execute">`
   - `services/invoices/src/infra/messaging/handlers/order-created.handler.ts`: `type CreateInvoiceFromOrder = Pick<CreateInvoiceFromOrderUseCase, "execute">`
 
@@ -125,7 +127,8 @@ infra  ──▶  application  ──▶  domain
 | --- | --- | --- | --- |
 | orders | `OrdersRepository` (`src/domain/order/orders-repository.ts`) | `DrizzleOrdersRepository` (`src/infra/db/repositories/drizzle-orders-repository.ts`) | `InMemoryOrdersRepository` (`test/fakes/in-memory-orders-repository.ts`) |
 | orders | `CustomersRepository` (`src/domain/customer/customers-repository.ts`) | `DrizzleCustomersRepository` (`src/infra/db/repositories/drizzle-customers-repository.ts`) | `InMemoryCustomersRepository` (`test/fakes/in-memory-customers-repository.ts`) |
-| orders | `OrderEventsPublisher` (`src/application/ports/order-events-publisher.ts`) | `RabbitMQOrderEventsPublisher` (`src/infra/messaging/publisher/rabbitmq-order-events-publisher.ts`) | `FakeOrderEventsPublisher` (`test/fakes/fake-order-events-publisher.ts`) |
+| orders | `OrderEventsPublisher` (`src/application/ports/order-events-publisher.ts`) | `OutboxOrderEventsPublisher` (`src/infra/db/outbox/outbox-order-events-publisher.ts`): grava na tabela `outbox_events` | `FakeOrderEventsPublisher` (`test/fakes/fake-order-events-publisher.ts`) |
+| orders | `UnitOfWork` (`src/application/ports/unit-of-work.ts`): `run(work)` entrega `{ orders, orderEvents }` ligados à mesma transação | `DrizzleUnitOfWork` (`src/infra/db/drizzle-unit-of-work.ts`) | `InMemoryUnitOfWork` (`test/fakes/in-memory-unit-of-work.ts`) |
 | invoices | `InvoicesRepository` (`src/domain/invoice/invoices-repository.ts`) | `DrizzleInvoicesRepository` (`src/infra/db/repositories/drizzle-invoices-repository.ts`) | `InMemoryInvoicesRepository` (`test/fakes/in-memory-invoices-repository.ts`) |
 
 Adapters de **entrada** (não implementam interface, chamam o caso de uso):
@@ -133,51 +136,42 @@ Adapters de **entrada** (não implementam interface, chamam o caso de uso):
 | Serviço | Adapter de entrada | Como é testado |
 | --- | --- | --- |
 | orders | `buildApp({ createOrder })` em `src/infra/http/app.ts`: rota `POST /orders` e `GET /health` | `test/infra/http/app.test.ts`, com `app.inject` e `createOrder = { execute: vi.fn() }` |
-| invoices | `createOrderCreatedHandler(createInvoiceFromOrder)` em `src/infra/messaging/handlers/order-created.handler.ts`, registrado por `startOrderCreatedConsumer` (`src/infra/messaging/subscriber.ts`) | `test/infra/messaging/order-created.handler.test.ts`, com canal fake `{ ack: vi.fn(), nack: vi.fn() }` |
+| invoices | `createOrderCreatedHandler(createInvoiceFromOrder)` em `src/infra/messaging/handlers/order-created.handler.ts`, registrado por `startConsumer` (`src/infra/messaging/consumer.ts`), que cuida de ack, retry e DLQ | `test/infra/messaging/order-created.handler.test.ts` (sem canal: o handler só lança) e `test/infra/messaging/consumer.test.ts` (canal fake que captura o callback do `consume`) |
 | invoices | `buildApp()` em `src/infra/http/app.ts`: só `GET /health` | sem teste |
 
 Os fakes in-memory expõem um array público (`items`, `published`) para os testes fazerem asserções.
 
 ### 3.4 `server.ts` como composition root
 
-O `server.ts` é o único lugar que conhece as implementações concretas. A ordem é sempre: adapters de saída → use cases → adapter de entrada → `listen`. Trecho real de `services/orders/src/server.ts`:
+O `server.ts` é o único lugar que conhece as implementações concretas. A ordem é sempre: adapters de saída → use cases → adapter de entrada → `listen` → registro do `shutdown`. Trecho de `services/orders/src/server.ts`:
 
 ```ts
 import "@opentelemetry/auto-instrumentations-node/register";
 
-import { CreateOrderUseCase } from "./application/use-cases/create-order.ts";
-import { DrizzleCustomersRepository } from "./infra/db/repositories/drizzle-customers-repository.ts";
-import { DrizzleOrdersRepository } from "./infra/db/repositories/drizzle-orders-repository.ts";
-import { db } from "./infra/db/client.ts";
-import { RabbitMQOrderEventsPublisher } from "./infra/messaging/publisher/rabbitmq-order-events-publisher.ts";
-import { ordersChannel } from "./infra/messaging/channels/orders.ts";
-import { buildApp } from "./infra/http/app.ts";
+// ...imports
 
 // Adapters de sáida
 const customersRepository = new DrizzleCustomersRepository(db);
-const ordersRepository = new DrizzleOrdersRepository(db);
-const orderEventsPublisher = new RabbitMQOrderEventsPublisher(ordersChannel);
+const unitOfWork = new DrizzleUnitOfWork(db);
 
 // Use cases
-const createOrder = new CreateOrderUseCase(
-  customersRepository,
-  ordersRepository,
-  orderEventsPublisher,
-);
+const createOrder = new CreateOrderUseCase(customersRepository, unitOfWork);
 
 // Adapter de entrada
 const app = buildApp({ createOrder });
 
-app
-  .listen({ host: "0.0.0.0", port: Number(process.env.PORT ?? 3333) })
-  .then(() => {
-    console.log("[Orders] HTTP Server running !");
-  });
+const outboxRelay = new OutboxRelay(db, ordersChannel);
+outboxRelay.start();
+
+app.listen({ host: "0.0.0.0", port: Number(process.env.PORT ?? 3333) });
+
+process.once("SIGTERM", shutdown);
+process.once("SIGINT", shutdown);
 ```
 
 O import do OpenTelemetry precisa ser o **primeiro**, para a auto-instrumentação conseguir aplicar patch em `http`, `fastify`, `pg` e `amqplib` antes de eles serem carregados.
 
-No invoices, o adapter de entrada é o consumidor da fila: `await startOrderCreatedConsumer(ordersChannel, handleOrderCreated)`. O servidor HTTP sobe só para o `/health`.
+No invoices, o adapter de entrada é o consumidor da fila: `const consumer = await startConsumer(ordersChannel, { queue: ORDER_CREATED_QUEUE, deadLetterQueue: ORDER_CREATED_DLQ, maxRetries: 3 }, handleOrderCreated)`. O servidor HTTP sobe só para o `/health`.
 
 ### 3.5 Cadeia de dependências de `POST /orders`
 
@@ -186,14 +180,16 @@ flowchart TD
     route["POST /orders<br/>infra/http/app.ts (buildApp)"]
     uc["CreateOrderUseCase<br/>application/use-cases/create-order.ts"]
     custRepo["CustomersRepository<br/>(porta, domain)"]
+    uow["UnitOfWork<br/>(porta, application/ports)"]
     ordRepo["OrdersRepository<br/>(porta, domain)"]
     pub["OrderEventsPublisher<br/>(porta, application/ports)"]
     order["OrderEntity.create()<br/>domain/order/order-entity.ts"]
     money["Money.fromCents()<br/>domain/shared/money.ts"]
     custEnt["CustomerEntity<br/>domain/customer/customer-entity.ts"]
     drizzleCust["DrizzleCustomersRepository"]
-    drizzleOrd["DrizzleOrdersRepository"]
-    rabbitPub["RabbitMQOrderEventsPublisher"]
+    drizzleUow["DrizzleUnitOfWork<br/>(db.transaction)"]
+    drizzleOrd["DrizzleOrdersRepository(tx)"]
+    outboxPub["OutboxOrderEventsPublisher(tx)<br/>INSERT outbox_events"]
     contract["orderCreatedMessageSchema<br/>@microservices/contracts"]
 
     route -->|"execute({ customerId, amountInCents })"| uc
@@ -202,23 +198,44 @@ flowchart TD
     drizzleCust -->|CustomerEntity.restore| custEnt
     uc -->|"2. cria"| order
     order --> money
-    uc -->|"3. save"| ordRepo
+    uc -->|"3. run"| uow
+    uow -.implementado por.-> drizzleUow
+    uow -->|"3a. save"| ordRepo
     ordRepo -.implementado por.-> drizzleOrd
-    uc -->|"4. publishOrderCreated"| pub
-    pub -.implementado por.-> rabbitPub
-    rabbitPub -->|parse| contract
+    uow -->|"3b. publishOrderCreated"| pub
+    pub -.implementado por.-> outboxPub
+    outboxPub -->|parse| contract
 ```
 
 Comportamento de `CreateOrderUseCase.execute`:
 
 1. Busca o cliente. Se não existir, lança `CustomerNotFoundError`, que a rota converte em 404.
 2. Cria o `OrderEntity` com `Money.fromCents(amountInCents)`. Valor zero lança `InvalidOrderAmountError`. Valor negativo ou não inteiro lança `InvalidMoneyError`.
-3. Salva o pedido.
-4. Publica `OrderCreated` com `orderId`, `amount` (centavos) e `customer { id, name, email }`.
+3. Dentro de `unitOfWork.run(...)`, numa única transação: salva o pedido e grava o evento `OrderCreated` (`orderId`, `amount` em centavos, `customer { id, name, email }`) na tabela `outbox_events`.
 
-O `save` e o `publish` **não** são atômicos: não há transação nem outbox. Se a publicação falhar, o pedido fica salvo sem evento.
+Se qualquer um dos dois falhar (por exemplo, a mensagem fora do contrato no `parse`), a transação é desfeita e nada fica gravado. A publicação no RabbitMQ acontece depois, pelo `OutboxRelay` (ver [4.4](#44-outbox-no-orders)).
 
 A rota usa um `DEFAULT_CUSTOMER_ID` fixo (`5961a952-0d3e-465f-b635-4b93a1cefa97`) com o comentário "Temporário: até a feature de customers". O `amount` do body é repassado como `amountInCents`. O error handler devolve a mensagem do erro para status < 500 e `{ message: "Internal server error" }` para 500, registrando os detalhes só no `console.error`.
+
+### 3.6 Ciclo de vida dos serviços
+
+**Graceful shutdown.** Cada `server.ts` registra `shutdown(signal)` com `process.once("SIGTERM", ...)` (enviado pelo ECS e pelo `node --watch` ao reiniciar) e `process.once("SIGINT", ...)` (Ctrl+C). Uma segunda chamada durante o encerramento é ignorada. Um `setTimeout` de **10 s** (com `.unref()`) loga `Forced shutdown` e chama `process.exit(1)` se algum passo travar. A ordem de encerramento é:
+
+| Passo | orders | invoices |
+| --- | --- | --- |
+| 1 | log `[Orders] <signal> received, shutting down` | log `[Invoices] <signal> received, shutting down` |
+| 2 | `app.close()`: para de aceitar HTTP e espera as requisições em andamento | `consumer.stop()`: `channel.cancel(consumerTag)` e espera as mensagens em processamento |
+| 3 | `outboxRelay.stop()`: cancela o próximo ciclo e espera o ciclo em andamento | `app.close()` |
+| 4 | `markBrokerShuttingDown()`, fecha o channel e a conexão do RabbitMQ | idem |
+| 5 | `db.$client.end()` | idem |
+| 6 | `process.exit(0)` | idem |
+
+**Conexão com o RabbitMQ.** O `client.ts` de cada serviço conecta com `connectWithRetry` (`connect-with-retry.ts`): até 10 tentativas, com espera que dobra a cada falha (1 s, 2 s, 4 s...) limitada a 30 s, e um `console.warn` por falha. Esgotadas as tentativas, o erro é relançado no top-level await e o processo cai.
+
+Com o serviço rodando:
+
+- `broker.on("error")` e `channel.on("error")` só logam com `console.error`;
+- `broker.on("close")`: se não foi o `shutdown` que fechou (`markBrokerShuttingDown()`), loga `RabbitMQ connection lost, exiting` e chama `process.exit(1)`. Não há reconexão dentro do processo: quem reinicia o serviço com uma conexão nova é o orquestrador (ECS ou a política de restart do container).
 
 ---
 
@@ -226,7 +243,10 @@ A rota usa um `DEFAULT_CUSTOMER_ID` fixo (`5961a952-0d3e-465f-b635-4b93a1cefa97`
 
 ### 4.1 `@microservices/contracts`
 
-Fica em `packages/contracts`. Exporta, a partir de `src/index.ts`, os schemas zod e os tipos das mensagens trocadas entre os serviços. Hoje há um único arquivo, `src/messages/order-created-message.ts`:
+Fica em `packages/contracts`. Exporta, a partir de `src/index.ts`, os schemas zod e os tipos das mensagens trocadas entre os serviços e os nomes compartilhados da topologia:
+
+- `src/exchanges.ts`: `EVENTS_EXCHANGE = "events"`;
+- `src/messages/order-created-message.ts`: o schema abaixo, `ORDER_CREATED_EVENT = "OrderCreated"` (tipo gravado no outbox) e `ORDER_CREATED_ROUTING_KEY = "order.created"`.
 
 ```ts
 export const orderCreatedMessageSchema = z.object({
@@ -244,35 +264,69 @@ export type OrderCreatedMessage = z.infer<typeof orderCreatedMessageSchema>;
 
 O pacote existe para que produtor e consumidor usem **a mesma definição** da mensagem, tanto o tipo TypeScript quanto a validação em runtime. Assim, uma mudança no formato quebra o typecheck dos dois lados. O pacote é distribuído como fonte TypeScript (`"exports": { ".": "./src/index.ts" }`), sem build, e por isso funciona com `--experimental-strip-types`. Ele não tem testes, `tsconfig.json` nem script `typecheck`. O código dele é verificado pelo `tsc` dos serviços que o importam.
 
-### 4.2 Catálogo de eventos
+### 4.2 Catálogo de eventos e topologia
 
-| Evento | Produtor | Consumidor | Fila / exchange | Formato da mensagem |
+| Evento | Produtor | Consumidor | Exchange / routing key | Formato da mensagem |
 | --- | --- | --- | --- | --- |
-| `OrderCreated` | orders: `RabbitMQOrderEventsPublisher.publishOrderCreated`, chamado por `CreateOrderUseCase` | invoices: `handleOrderCreated` (`order-created.handler.ts`), que chama `CreateInvoiceFromOrderUseCase` | Fila `orders-queue`, publicada com `channel.sendToQueue` (exchange default do AMQP, sem exchange nomeado). A fila é declarada com `assertQueue("orders-queue")` nos dois serviços (`infra/messaging/channels/orders.ts`). | JSON `{ "data": OrderCreatedMessage }`, ou seja `{ "data": { "orderId": uuid, "amount": int > 0 (centavos), "customer": { "id": uuid, "name": string, "email": email } } }` |
+| `OrderCreated` | orders: `CreateOrderUseCase` grava no outbox, e o `OutboxRelay` publica | invoices: `startConsumer` + `handleOrderCreated` (`order-created.handler.ts`), que chama `CreateInvoiceFromOrderUseCase` | Exchange `events` (topic, durable), routing key `order.created`. Publicada com `persistent: true` e `messageId` = id do evento no outbox | JSON `{ "data": OrderCreatedMessage }`, ou seja `{ "data": { "orderId": uuid, "amount": int > 0 (centavos), "customer": { "id": uuid, "name": string, "email": email } } }` |
 
-Não há header nem campo que identifique o tipo do evento. A fila `orders-queue` carrega só `OrderCreated`. O nome da fila está escrito literalmente em quatro lugares: os dois `channels/orders.ts`, o publisher e o `subscriber.ts`.
+Filas do invoices (`services/invoices/src/infra/messaging/topology.ts`), todas `durable`:
 
-### 4.3 Validação e ack/nack
+| Fila | Argumentos | Papel |
+| --- | --- | --- |
+| `invoices.order-created` | bind em `events` com `order.created`. `deadLetterExchange: ""`, `deadLetterRoutingKey: invoices.order-created.retry` | Fila principal, consumida pelo invoices. Um `nack` sem requeue manda a mensagem para a fila de retry. |
+| `invoices.order-created.retry` | `messageTtl: 5000`, `deadLetterExchange: ""`, `deadLetterRoutingKey: invoices.order-created` | Sem consumidor. Depois de 5 s a mensagem expira e volta para a fila principal. |
+| `invoices.order-created.dlq` | — | Falhas persistentes e mensagens inválidas. Sem consumidor. |
 
-**Na publicação** (orders, `rabbitmq-order-events-publisher.ts`):
+Quem declara cada parte (`assertExchange` e `assertQueue` são idempotentes):
 
-```ts
-const data = orderCreatedMessageSchema.parse(message);
-this.#channel.sendToQueue("orders-queue", Buffer.from(JSON.stringify({ data })));
-```
+- **orders**: só a exchange `events` (`channels/orders.ts`). Ele não sabe quais filas existem.
+- **invoices**: a exchange `events`, as próprias três filas e o bind (`setupTopology`).
 
-Se a mensagem violar o contrato, o `parse` lança, nada é enviado e o erro sobe até a rota, que responde 500. O teste `test/infra/messaging/rabbitmq-order-events-publisher.test.ts` cobre esse caso.
+Uma exchange topic descarta mensagens que não combinam com nenhum bind. Por isso, numa instalação nova, o invoices precisa subir (e criar o bind) antes de o orders publicar o primeiro evento.
 
-**No consumo** (invoices, `order-created.handler.ts`), com `noAck: false` em `subscriber.ts`:
+### 4.3 Validação, retry e DLQ
+
+**Na gravação** (orders, `OutboxOrderEventsPublisher`): `orderCreatedMessageSchema.parse(message)` antes do insert no outbox. Se a mensagem violar o contrato, o `parse` lança, a transação do pedido é desfeita e a rota responde 500.
+
+**No consumo** (invoices). O handler (`order-created.handler.ts`) não faz ack/nack: só lança.
+
+- JSON inválido ou `payload.data` reprovado em `orderCreatedMessageSchema.safeParse` → lança `InvalidMessageError` (`infra/messaging/errors.ts`), com o `path` e a `message` de cada issue no texto.
+- Mensagem válida → `createInvoiceFromOrder.execute({ orderId })`, deixando qualquer erro propagar.
+
+O `startConsumer` (`consumer.ts`, `noAck: false`) decide o destino da mensagem:
 
 | Situação | Ação |
 | --- | --- |
-| Conteúdo não é JSON válido (`JSON.parse` lança) | `console.error` + `channel.nack(message, false, false)` |
-| `payload.data` não passa em `orderCreatedMessageSchema.safeParse` | `console.warn("Invalid OrderCreated message, discarding")` + `nack(message, false, false)` |
-| `createInvoiceFromOrder.execute` lança (ex.: banco fora) | `console.error("Failed to process OrderCreated")` + `nack(message, false, false)` |
-| Sucesso | `channel.ack(message)` |
+| Sucesso | `ack` |
+| `InvalidMessageError` | vai direto para a DLQ (sem retentativas) + `ack` |
+| Outro erro, com menos de `maxRetries` (3) retentativas | `nack(message, false, false)` → fila de retry → volta em 5 s. `console.warn` com o número da tentativa. |
+| Outro erro, já com 3 retentativas | DLQ + `ack` |
 
-Em todos os casos de falha o `nack` é feito **sem requeue** (`requeue = false`). Como nenhuma dead-letter exchange está configurada, a mensagem é descartada.
+- O número de retentativas vem do header `x-death`: o `count` da entrada com `queue` igual à fila principal e `reason` igual a `"rejected"` (0 se não houver).
+- O envio para a DLQ é `sendToQueue(dlq, content, { persistent: true, messageId, headers })`, com os headers originais mais `x-last-error` (a mensagem do erro), e é logado com `console.warn`.
+
+**Reprocessar a DLQ.** Depois de corrigir a causa, mova as mensagens de `invoices.order-created.dlq` para `invoices.order-created` pela UI do RabbitMQ (`:15672`, aba *Queues* → `invoices.order-created.dlq` → *Move messages*, que usa o plugin shovel). Se a mensagem movida conservar o header `x-death` antigo, uma nova falha pode mandá-la direto para a DLQ, sem as 3 retentativas.
+
+### 4.4 Outbox no orders
+
+- **Tabela `outbox_events`** (`infra/db/schema/outbox-events.ts`): `id`, `type` (ex.: `OrderCreated`), `payload` (jsonb, a mensagem já validada), `created_at`, `published_at` (nulo enquanto pendente), `attempts` e `last_error`, com índice em `(published_at, created_at)`.
+- **Unit of work**: `DrizzleUnitOfWork.run(work)` abre `db.transaction` e entrega `DrizzleOrdersRepository(tx)` e `OutboxOrderEventsPublisher(tx)`. O pedido e o evento são gravados juntos ou nenhum dos dois.
+- **Relay** (`infra/messaging/outbox-relay.ts`): `OutboxRelay.start()` roda um ciclo por segundo. Cada ciclo (`publishPending`), numa transação:
+  - seleciona até 50 eventos com `published_at` nulo, em ordem de `created_at`, com `FOR UPDATE SKIP LOCKED` (várias instâncias não publicam o mesmo evento);
+  - publica cada um com `channel.publish("events", routingKey, { data: payload }, { persistent: true, messageId: id })` e espera `waitForConfirms()` (o channel é de confirm);
+  - no confirm, grava `published_at`, incrementa `attempts` e limpa `last_error`. Na falha, incrementa `attempts`, grava `last_error` e deixa o evento pendente para o próximo ciclo.
+- A routing key vem de `ROUTING_KEY_BY_EVENT_TYPE`. Um `type` sem routing key gera o erro `No routing key configured for event type "<tipo>"`.
+- A entrega é **at-least-once**: se o processo cair entre o confirm e o commit, o evento é publicado de novo. O consumidor é idempotente por isso (ver 4.5).
+- **Reenviar um evento**: `UPDATE outbox_events SET published_at = NULL WHERE id = '<id>';` no banco `orders`. O relay o publica no próximo ciclo.
+
+### 4.5 Idempotência no invoices
+
+- A coluna `invoices.order_id` é `unique` (`infra/db/schema/invoices.ts`, migration `0001`).
+- `CreateInvoiceFromOrderUseCase` procura `findByOrderId` antes e devolve a invoice existente.
+- `DrizzleInvoicesRepository.save` usa `onConflictDoNothing({ target: order_id })`, que cobre a corrida entre duas entregas simultâneas.
+
+Assim, a mesma mensagem entregue mais de uma vez (reenvio do outbox, retry, reprocessamento da DLQ) gera uma única invoice.
 
 ---
 
@@ -289,11 +343,11 @@ Arquivos em `kebab-case`. Classes em `PascalCase` com sufixo que indica o papel.
 | Entidade | `OrderEntity`, `CustomerEntity`, `InvoiceEntity` | `domain/order/order-entity.ts`, `domain/customer/customer-entity.ts`, `domain/invoice/invoice-entity.ts` |
 | Value object | `Money` | `domain/shared/money.ts` |
 | Porta de repositório | `OrdersRepository`, `CustomersRepository`, `InvoicesRepository` (interface, nome no plural) | `domain/order/orders-repository.ts`, `domain/customer/customers-repository.ts`, `domain/invoice/invoices-repository.ts` |
-| Outra porta | `OrderEventsPublisher` | `application/ports/order-events-publisher.ts` |
+| Outra porta | `OrderEventsPublisher`, `UnitOfWork` | `application/ports/order-events-publisher.ts`, `application/ports/unit-of-work.ts` |
 | Caso de uso | `CreateOrderUseCase`, `CreateInvoiceFromOrderUseCase` (método único `execute(args)`) | `use-cases/create-order.ts`, `use-cases/create-invoice-from-order.ts` (sem o sufixo `use-case` no arquivo) |
 | Repositório Drizzle | `Drizzle<Plural>Repository` | `drizzle-<plural>-repository.ts` |
-| Adapter de mensageria | `RabbitMQOrderEventsPublisher` | `rabbitmq-order-events-publisher.ts` |
-| Fake de repositório | `InMemory<Plural>Repository` | `test/fakes/in-memory-<plural>-repository.ts` |
+| Adapter de outbox / mensageria | `OutboxOrderEventsPublisher`, `OutboxRelay`, `DrizzleUnitOfWork` | `infra/db/outbox/outbox-order-events-publisher.ts`, `infra/messaging/outbox-relay.ts`, `infra/db/drizzle-unit-of-work.ts` |
+| Fake de repositório | `InMemory<Plural>Repository`, `InMemoryUnitOfWork` | `test/fakes/in-memory-<plural>-repository.ts`, `test/fakes/in-memory-unit-of-work.ts` |
 | Outro fake | `Fake<Porta>` | `test/fakes/fake-order-events-publisher.ts` |
 | Erro | `<Descrição>Error extends Error`, com `this.name` igual ao nome da classe | `domain/<agregado>/errors.ts` (`domain/order/errors.ts`, `domain/customer/errors.ts`, `domain/invoice/errors.ts`) |
 
@@ -372,14 +426,15 @@ test: {
 | --- | --- | --- | --- |
 | Domínio (entidades / VOs) | `test/domain/order-entity.test.ts`, `test/domain/money.test.ts` | `test/domain/invoice-entity.test.ts` | Não |
 | Caso de uso (com fakes in-memory) | `test/application/create-order.test.ts` | `test/application/create-invoice-from-order.test.ts` | Não |
-| Adapter de saída: repositório Drizzle | `test/infra/db/drizzle-orders-repository.test.ts`, `test/infra/db/drizzle-customers-repository.test.ts` | `test/infra/db/drizzle-invoices-repository.test.ts` | **Sim** (Postgres de teste) |
-| Adapter de saída: publisher | `test/infra/messaging/rabbitmq-order-events-publisher.test.ts` (canal fake `{ sendToQueue: vi.fn() }`) | — | Não (nem RabbitMQ) |
+| Adapter de saída: Drizzle (repositórios, unit of work, outbox) | `test/infra/db/drizzle-orders-repository.test.ts`, `drizzle-customers-repository.test.ts`, `drizzle-unit-of-work.test.ts`, `outbox-order-events-publisher.test.ts` | `test/infra/db/drizzle-invoices-repository.test.ts` | **Sim** (Postgres de teste) |
+| Relay do outbox | `test/infra/messaging/outbox-relay.test.ts` (banco real + canal fake `{ publish, waitForConfirms }`) | — | **Sim** (Postgres de teste), sem RabbitMQ |
+| Conexão com retentativas | `test/infra/messaging/connect-with-retry.test.ts` (sleep falso) | `test/infra/messaging/connect-with-retry.test.ts` | Não |
 | Adapter de entrada: rota HTTP | `test/infra/http/app.test.ts` (`buildApp` + `app.inject`) | — | Não |
-| Adapter de entrada: handler de mensagem | — | `test/infra/messaging/order-created.handler.test.ts` | Não |
+| Adapter de entrada: handler e consumer | — | `test/infra/messaging/order-created.handler.test.ts`, `test/infra/messaging/consumer.test.ts` (canal fake `{ consume, ack, nack, sendToQueue, cancel }`) | Não |
 
 A pasta `test/` espelha o `src/`: `test/domain/`, `test/application/`, `test/infra/{db,http,messaging}/`, mais `test/fakes/` para os test doubles. Hoje o invoices não tem testes em `test/infra/http/`.
 
-Os testes de repositório Drizzle importam o `db` real (`src/infra/db/client.ts`), limpam as tabelas no `beforeEach` (`db.delete(schema.orders)` etc.) e fecham a conexão no `afterAll` (`db.$client.end()`). Nenhum teste precisa de RabbitMQ.
+Os testes de `test/infra/db/` e o do relay importam o `db` real (`src/infra/db/client.ts`), limpam as tabelas no `beforeEach` (`db.delete(schema.orders)` etc.) e fecham a conexão no `afterAll` (`db.$client.end()`). Nenhum teste precisa de RabbitMQ.
 
 Fakes e test doubles ficam em `test/fakes/`: os repositórios in-memory (`in-memory-*-repository.ts`) e o publisher falso (`fake-order-events-publisher.ts`).
 
@@ -503,14 +558,16 @@ docker compose -f services/orders/docker-compose.yml exec orders-pg \
 
 - As colunas seguem a migration `0000_aromatic_queen_noir.sql`. `date_of_birth` é a única coluna opcional.
 - O `ON CONFLICT (id) DO NOTHING` deixa o comando seguro para rodar de novo.
-- `name` e `email` precisam passar no `orderCreatedMessageSchema` (`name` não vazio, `email` válido). Caso contrário, o pedido é salvo, mas a publicação lança erro e a rota responde 500.
+- `name` e `email` precisam passar no `orderCreatedMessageSchema` (`name` não vazio, `email` válido). Caso contrário, o `parse` do outbox lança, a transação é desfeita e a rota responde 500.
 
 **8. Serviços** (um terminal para cada)
 
 ```bash
+npm run dev -w @microservices/invoices    # :3334. Suba primeiro: cria as filas e o bind na exchange
 npm run dev -w @microservices/orders      # :3333, node --env-file=.env --experimental-strip-types --watch
-npm run dev -w @microservices/invoices    # :3334
 ```
+
+Se o RabbitMQ ainda não estiver pronto, os serviços tentam conectar de novo por alguns segundos (ver [3.6](#36-ciclo-de-vida-dos-serviços)).
 
 **9. Testar o fluxo pelo Kong**
 
@@ -523,7 +580,7 @@ curl -X POST http://127.0.0.1:8000/orders \
 
 O `amount` é repassado como centavos (`amountInCents`). Para conferir:
 
-- A mensagem passa pela fila `orders-queue`, visível na UI do RabbitMQ.
+- O relay publica o evento na exchange `events` em até 1 s, e a mensagem passa pela fila `invoices.order-created`, visível na UI do RabbitMQ. Na tabela `outbox_events`, o `published_at` fica preenchido.
 - O invoices grava uma linha na tabela `invoices` com o `order_id`.
 - Os traces dos dois serviços aparecem no Jaeger.
 
@@ -671,16 +728,16 @@ Pré-requisitos: Pulumi CLI, credenciais AWS configuradas, Docker local (para o 
 
 Checklist na ordem em que o trabalho deve ser feito. Pule os passos que a feature não exige (por exemplo, o contrato, se ela não troca mensagens).
 
-1. **Contrato**: se a feature publica ou consome uma mensagem, crie o schema zod e o tipo em `packages/contracts/src/messages/<nome>-message.ts` e exporte em `packages/contracts/src/index.ts`. O envelope na fila continua sendo `{ data }`.
+1. **Contrato**: se a feature publica ou consome uma mensagem, crie o schema zod, o tipo, a constante do tipo do evento e a routing key em `packages/contracts/src/messages/<nome>-message.ts` e exporte em `packages/contracts/src/index.ts`. A exchange continua sendo `events` e o envelope, `{ data }`.
 2. **Entidade / value object**: em `src/domain/<agregado>/<agregado>-entity.ts` (value objects compartilhados em `src/domain/shared/`), com `private constructor`, `static create` (valida e gera o id) e `static restore`. Erros em `domain/<agregado>/errors.ts`. Teste em `test/domain/`, sem banco.
 3. **Porta**: a interface de repositório fica em `src/domain/<agregado>/<plural>-repository.ts`. Outras portas (publisher etc.) ficam em `src/application/ports/`.
 4. **Use case + teste com fakes**: classe `XxxUseCase` em `src/application/use-cases/`, com as portas injetadas no construtor em campos `#` e o método `execute(args)`. Teste em `test/application/` com os fakes `InMemory*Repository` e `Fake*` de `test/fakes/`. Crie os fakes que faltarem.
 5. **Adapter de saída + teste de integração**:
    - Repositório Drizzle em `src/infra/db/repositories/drizzle-<plural>-repository.ts`, com schema em `src/infra/db/schema/` registrado em `schema/index.ts`. Teste em `test/infra/db/` contra o banco `*_test`.
-   - Publisher em `src/infra/messaging/`, validando com o schema do contrato. Teste em `test/infra/messaging/` com canal fake.
+   - Evento publicado pelo orders: grave no outbox dentro do unit of work (validando com o schema do contrato) e adicione o tipo em `ROUTING_KEY_BY_EVENT_TYPE` do `OutboxRelay`.
 6. **Adapter de entrada + teste**:
    - Rota em `src/infra/http/app.ts`, recebendo o use case como `Pick<XxxUseCase, "execute">`. Teste em `test/infra/http/` com `app.inject`.
-   - Ou handler de mensagem em `src/infra/messaging/handlers/`, validando `payload.data` com `safeParse` e fazendo `ack`/`nack`. Teste em `test/infra/messaging/` com canal `{ ack, nack }` fake.
+   - Ou handler de mensagem em `src/infra/messaging/handlers/`, validando `payload.data` com `safeParse` e lançando `InvalidMessageError` se falhar. O handler não faz ack/nack: registre-o com `startConsumer`, e declare as filas (principal, retry, DLQ) e o bind em `topology.ts`. Teste em `test/infra/messaging/` sem canal. O consumidor precisa ser idempotente.
 7. **Ligar no `server.ts`**: instancie o adapter concreto, depois o use case, e passe o use case para o adapter de entrada. O import do OpenTelemetry continua na primeira linha.
 8. **Migration**: gere com `drizzle-kit generate` (ver [7.6](#76-migrations)) e aplique no banco de dev e no de teste (`npm run db:migrate:test -w <workspace>`). O CI aplica as migrations de teste antes do `npm test`.
 
@@ -692,16 +749,14 @@ No fim, rode `npm run typecheck` e `npm test` na raiz.
 
 Esta seção só descreve o comportamento atual. Não há propostas de solução aqui.
 
-- **Dual write sem outbox.** Em `CreateOrderUseCase.execute`, o pedido é salvo no Postgres (`ordersRepository.save`) e só depois o evento é publicado no RabbitMQ (`orderEventsPublisher.publishOrderCreated`). As duas escritas não são atômicas e não existe outbox. Se a publicação falhar (broker fora, mensagem fora do contrato), o pedido fica salvo, a rota responde 500 e nenhuma invoice é criada.
 - **Customer fixo.** Todo `POST /orders` usa `DEFAULT_CUSTOMER_ID` (`5961a952-0d3e-465f-b635-4b93a1cefa97`), definido em `services/orders/src/infra/http/app.ts` com o comentário "Temporário: até a feature de customers". Não existe cadastro de clientes nem seed. O body aceita só `amount`.
-- **Fila direta, sem exchange, DLQ ou retry.**
-  - O orders publica com `sendToQueue("orders-queue", ...)` no exchange default. Não há exchange nomeado, routing key, tipo do evento na mensagem nem `persistent: true`.
-  - No invoices, toda falha faz `nack(message, false, false)` (sem requeue). Como não há dead-letter exchange nem política de retry, a mensagem é descartada.
-- **Consumer sem idempotência.** `CreateInvoiceFromOrderUseCase` sempre cria uma invoice nova com `randomUUID()`. A tabela `invoices` não tem restrição de unicidade em `order_id`. Uma mesma mensagem entregue duas vezes gera duas invoices para o mesmo pedido.
+- **Eventos sem bind são descartados.** A exchange `events` é topic. Um evento publicado antes de existir uma fila ligada à routing key dele é descartado pelo RabbitMQ, mesmo com o confirm do publisher. O outbox o marca como publicado.
+- **Sem reconexão dentro do processo.** Se a conexão com o RabbitMQ cair, o serviço sai com código 1 e depende do orquestrador (ECS, política de restart do container) para voltar. No `npm run dev` local, o processo fica parado até ser reiniciado.
 - **Logs com `console`.** O logging é feito com `console.log`, `console.warn` e `console.error`:
   - mensagem de servidor no ar, nos dois `server.ts`;
   - erros 500, no error handler do orders;
-  - mensagens inválidas ou com falha, no handler do invoices.
+  - retentativas, envios para a DLQ e falhas de conexão, na mensageria;
+  - o relay do outbox e o shutdown.
 
   O logger do Fastify não está habilitado (`fastify()` sem opções), e não há log estruturado nem correlação dos logs com os traces do OpenTelemetry.
 
@@ -709,7 +764,7 @@ Esta seção só descreve o comportamento atual. Não há propostas de solução
 
 ## 11. Inconsistências e pontos de atenção
 
-Itens encontrados durante a leitura do código e ainda não resolvidos. Os itens já corrigidos foram removidos da lista: `.gitignore` com linhas coladas, `noUnusedLocals` só no orders, teste do repositório de invoices sem asserção, nome de arquivo de entidade no plural, `Order` fora de subpasta, layout de `test/` diferente entre os serviços e `app` pronto no invoices em vez de `buildApp()`.
+Itens encontrados durante a leitura do código e ainda não resolvidos. Os itens já corrigidos foram removidos da lista: `.gitignore` com linhas coladas, `noUnusedLocals` só no orders, teste do repositório de invoices sem asserção, nome de arquivo de entidade no plural, `Order` fora de subpasta, layout de `test/` diferente entre os serviços `app` pronto no invoices em vez de `buildApp()`, import duplicado no `server.ts` do invoices, nome da fila duplicado e falta de atomicidade entre `save` e `publish`.
 
 ### Configuração / repositório
 
@@ -720,23 +775,20 @@ Itens encontrados durante a leitura do código e ainda não resolvidos. Os itens
 ### Arquitetura / código
 
 4. **Error handler só no orders.** Os dois serviços agora usam `buildApp()`, mas só o do orders configura `setErrorHandler`, que esconde os detalhes de erros 500. O `buildApp()` do invoices não configura error handler e não recebe dependências, porque só expõe `/health`.
-5. **Import duplicado em `services/invoices/src/server.ts`.** Há um `import "./infra/messaging/subscriber.ts";` só por side effect (o módulo não tem side effects) e, logo abaixo, o import nomeado do mesmo arquivo.
-6. **Kong roteia `/invoices`, mas o invoices não tem rota `/invoices`**, só `/health`. O `/health` dos serviços também não é exposto pelo Kong.
-7. **CORS configurado duas vezes**: no plugin `cors` do Kong e no `@fastify/cors` (`origin: "*"`) de cada serviço.
-8. **Nome da fila duplicado.** `"orders-queue"` aparece literal em 4 arquivos e não faz parte de `@microservices/contracts`, que só contém o schema.
-9. **Sem atomicidade entre `save` e `publish`** em `CreateOrderUseCase` (sem outbox). Mensagens com falha são descartadas (`nack` sem requeue e sem DLX). As mensagens também não são publicadas com `persistent: true`.
-10. **Cliente fixo na rota** (`DEFAULT_CUSTOMER_ID`, marcado como temporário no código) e nenhum seed para criá-lo.
-11. **O domínio importa `node:crypto`.** A regra "domain não importa nada de fora" vale para pacotes de terceiros e outras camadas. Os módulos built-in do Node são usados (`randomUUID`).
-12. **Validação de `orderId` diferente de `customerId`.** `InvoiceEntity.create` usa `orderId?.trim()` (optional chaining) e `OrderEntity.create` usa `customerId.trim()`.
-13. **O invoice guarda só `orderId`.** O valor (`amount`) e o cliente vêm na mensagem e são ignorados. A tabela `invoices` não tem `amount` nem `created_at`.
+5. **Kong roteia `/invoices`, mas o invoices não tem rota `/invoices`**, só `/health`. O `/health` dos serviços também não é exposto pelo Kong.
+6. **CORS configurado duas vezes**: no plugin `cors` do Kong e no `@fastify/cors` (`origin: "*"`) de cada serviço.
+7. **Cliente fixo na rota** (`DEFAULT_CUSTOMER_ID`, marcado como temporário no código) e nenhum seed para criá-lo.
+8. **O domínio importa `node:crypto`.** A regra "domain não importa nada de fora" vale para pacotes de terceiros e outras camadas. Os módulos built-in do Node são usados (`randomUUID`).
+9. **Validação de `orderId` diferente de `customerId`.** `InvoiceEntity.create` usa `orderId?.trim()` (optional chaining) e `OrderEntity.create` usa `customerId.trim()`.
+10. **O invoice guarda só `orderId`.** O valor (`amount`) e o cliente vêm na mensagem e são ignorados. A tabela `invoices` não tem `amount` nem `created_at`.
 
 ### Convenções de nomes
 
-14. **`InvalidMoneyError` fora de um `errors.ts`.** Os erros dos agregados ficam em `domain/<agregado>/errors.ts`, mas o `InvalidMoneyError` está dentro de `domain/shared/money.ts`.
-15. **Sufixo `.handler.ts`.** Só `order-created.handler.ts` usa sufixo com ponto. Os outros arquivos usam só kebab-case (`rabbitmq-order-events-publisher.ts`, `drizzle-orders-repository.ts`).
-16. **Nome do tipo de argumentos dos use cases.** O orders usa `CreateOrderArgs` e o invoices usa `CreateInvoiceFromOrderUseCaseArgs`.
-17. **Comentários de seção no `server.ts`.** O orders tem "Adapters de sáida" (com erro de acentuação) e "Adapter de entrada". O invoices tem "Adapters de saída", "UseCases" e "Adapters de entrada".
+11. **`InvalidMoneyError` fora de um `errors.ts`.** Os erros dos agregados ficam em `domain/<agregado>/errors.ts`, mas o `InvalidMoneyError` está dentro de `domain/shared/money.ts`.
+12. **Sufixo `.handler.ts`.** Só `order-created.handler.ts` usa sufixo com ponto. Os outros arquivos usam só kebab-case (`outbox-order-events-publisher.ts`, `drizzle-orders-repository.ts`).
+13. **Nome do tipo de argumentos dos use cases.** O orders usa `CreateOrderArgs` e o invoices usa `CreateInvoiceFromOrderUseCaseArgs`.
+14. **Comentários de seção no `server.ts`.** O orders tem "Adapters de sáida" (com erro de acentuação) e "Adapter de entrada". O invoices tem "Adapters de saída", "UseCases" e "Adapters de entrada".
 
 ### Testes
 
-18. **Sem testes para:** `startOrderCreatedConsumer` (`subscriber.ts`), o `GET /health` dos dois serviços (o invoices não tem nada em `test/infra/http/`) e o pacote `@microservices/contracts`.
+15. **Sem testes para:** `setupTopology` (`topology.ts`), o `shutdown` dos `server.ts`, o `GET /health` dos dois serviços (o invoices não tem nada em `test/infra/http/`) e o pacote `@microservices/contracts`.
