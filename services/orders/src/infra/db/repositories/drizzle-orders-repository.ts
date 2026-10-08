@@ -1,14 +1,12 @@
 import type { OrderEntity } from "../../../domain/order/order-entity.ts";
 import type { OrdersRepository } from "../../../domain/order/orders-repository.ts";
-import { db as database } from "../client.ts";
 import { schema } from "../schema/index.ts";
-
-type Database = typeof database;
+import type { DbExecutor } from "../executor.ts";
 
 export class DrizzleOrdersRepository implements OrdersRepository {
-  #db: Database;
+  #db: DbExecutor;
 
-  constructor(db: Database) {
+  constructor(db: DbExecutor) {
     this.#db = db;
   }
 

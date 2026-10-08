@@ -1,16 +1,14 @@
 import { eq } from "drizzle-orm";
 
-import { db as database } from "../client.ts";
 import { schema } from "../schema/index.ts";
 import type { CustomersRepository } from "../../../domain/customer/customers-repository.ts";
 import { CustomerEntity } from "../../../domain/customer/customer-entity.ts";
-
-type Database = typeof database;
+import type { DbExecutor } from "../executor.ts";
 
 export class DrizzleCustomersRepository implements CustomersRepository {
-  #db: Database;
+  #db: DbExecutor;
 
-  constructor(db: Database) {
+  constructor(db: DbExecutor) {
     this.#db = db;
   }
 
