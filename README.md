@@ -138,6 +138,8 @@ Cada serviço declara as próprias filas ao subir, e o RabbitMQ descarta eventos
 
 Interfaces úteis: RabbitMQ Management em http://127.0.0.1:15672 (`guest`/`guest`, padrão local) e Jaeger em http://127.0.0.1:16686. A documentação das rotas (Swagger UI) fica em http://127.0.0.1:3333/docs (orders) e http://127.0.0.1:3334/docs (invoices), com o OpenAPI em `/docs/json`.
 
+Para testar a API na AWS e ver os traces no Grafana Cloud, siga o roteiro em [docs/production-tests.md](docs/production-tests.md).
+
 ## Deploy na AWS
 
 > **Custo:** os recursos criados (dois load balancers, cinco tasks Fargate e os IPs públicos delas) são cobrados enquanto estão no ar. O deploy é pensado para ser efêmero: suba, demonstre e rode `pulumi destroy` logo em seguida.
