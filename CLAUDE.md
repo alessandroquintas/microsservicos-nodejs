@@ -31,7 +31,7 @@ Os testes em `test/infra/db/` precisam do Postgres do serviço rodando (o `globa
 
 - `src/domain/<agregado>/` (+ `shared/`): não importa de `application`, `infra` nem de pacotes de terceiros (só built-ins como `node:crypto`).
 - `src/application/`: `use-cases/` (classe com `execute(args)`), `ports/` e `queries/` (portas de leitura que devolvem DTOs, sem passar pelas entidades). Importa só de `domain` e tipos de `@microservices/contracts`.
-- `src/infra/`: adapters (`db/`, `http/`, `messaging/`, `gateway/`). Adapters de entrada recebem `Pick<XUseCase, "execute">`.
+- `src/infra/`: adapters (`db/`, `http/`, `messaging/`, `gateway/`). Adapters de entrada recebem `Pick<XUseCase, "execute">`. HTTP: `schemas/` (zod) → `routes/` (plugin Fastify, só monta a rota) → `controllers/` (chama o use case e devolve `HttpResponse`); erro de domínio vira status em `http/common/errors/domain-error-statuses.ts`, sem try/catch nas rotas. Erros e respostas HTTP compartilhados ficam em `http/common/{errors,responses}/`.
 - `src/bootstrap/` + `src/server.ts`: composition root, o único lugar que instancia adapters concretos. `bootstrap/use-cases.ts` (`createUseCases()`: adapters de saída + use cases), `bootstrap/messaging.ts` (`startConsumers`, `startOutboxRelay`), `bootstrap/connections.ts` (`closeConnections`) e `bootstrap/graceful-shutdown.ts`. O `server.ts` só liga essas peças ao Fastify.
 - Nova dependência de use case: interface (repositório em `domain/<agregado>/`, outras em `application/ports/`), adapter em `infra/`, fake em `test/fakes/`, ligação no `bootstrap/use-cases.ts`.
 - Bounded contexts não importam código uns dos outros (cada serviço tem o próprio `Money`).

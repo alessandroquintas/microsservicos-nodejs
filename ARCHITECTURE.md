@@ -123,7 +123,7 @@ O `package.json` da raiz declara:
 
 - Existe um único `package-lock.json`, na raiz. O `npm install` cria symlinks em `node_modules/@microservices/{orders,invoices,payments,contracts,messaging}`.
 - Os serviços consomem os pacotes como dependência normal: `"@microservices/contracts": "^1.0.0"`, `"@microservices/messaging": "^1.0.0"` (instalados com `npm install @microservices/<pacote> -w <serviço>`).
-- **Cada pacote declara as próprias dependências.** Não dependa do hoisting. Exemplo: o orders declara `@opentelemetry/api` porque `src/infra/http/app.ts` usa `trace`, e os outros não declaram porque não usam. Todos declaram `zod`, `amqplib`, `drizzle-orm` etc., mesmo que a versão física seja compartilhada.
+- **Cada pacote declara as próprias dependências.** Não dependa do hoisting. Exemplo: o orders declara `@opentelemetry/api` porque `src/infra/http/controllers/orders-controller.ts` usa `trace`, e os outros não declaram porque não usam. Todos declaram `zod`, `amqplib`, `drizzle-orm` etc., mesmo que a versão física seja compartilhada.
 - `infra/` **não** faz parte dos workspaces e tem o próprio `package-lock.json`.
 - Os Dockerfiles dos serviços instalam só as dependências de produção do workspace alvo (`npm ci --omit=dev --workspace=@microservices/orders`). Para isso, copiam os `package.json` de **todos** os workspaces (os dois pacotes e os três serviços), porque o `npm ci` exige que o lockfile bata. No runner, copiam `packages/contracts`, `packages/messaging` e o próprio serviço.
 
@@ -155,7 +155,14 @@ Dentro de `infra/`, a organização é a mesma nos três serviços:
 - `infra/messaging/topology.ts`: nomes das filas do serviço e chamadas a `declareConsumerQueues`.
 - `infra/messaging/routing-keys.ts`: `ROUTING_KEY_BY_EVENT_TYPE`, o mapa de tipo de evento do outbox para routing key, passado ao `OutboxRelay`.
 - `infra/messaging/handlers/*.handler.ts`: um handler por evento consumido, e `permanent-errors.ts` (`toPermanentError`, ver [4.3](#43-validação-retry-e-dlq)).
-- `infra/http/app.ts`: `buildApp(deps)`, instância do Fastify com `fastify-type-provider-zod`.
+- `infra/http/` (orders e invoices; o payments só tem `app.ts` com o `/health`):
+  - `app.ts`: `buildApp(deps)` cria o Fastify com `fastify-type-provider-zod`, o error handler, o `/health`, instancia os controllers e registra as rotas. Não declara rota de negócio.
+  - `schemas/<recurso>-schemas.ts`: schemas zod de body, params e querystring, com os tipos inferidos (`CreateOrderBody`, `ListInvoicesQuery`...).
+  - `routes/<recurso>-routes.ts`: `xxxRoutes(controller)` devolve um `FastifyPluginAsyncZod` que liga método + URL + schema ao método do controller, via `sendResponse(reply, ...)`. Nada de regra aqui.
+  - `controllers/<recurso>-controller.ts`: `XxxController` recebe os use cases no construtor, como argumentos posicionais (`type GetInvoice = Pick<GetInvoiceUseCase, "execute">`), guarda em campos `#`, traduz a entrada validada para os args do use case e devolve `HttpResponse` (`ok`/`created`). Não conhece Fastify.
+  - `common/errors/error-handler.ts`: `createErrorHandler(statuses)`. Erro mapeado em `common/errors/domain-error-statuses.ts` (`[ErrorClass, status]`), erro com `statusCode` (validação do Fastify, `HttpError`) ou 500 genérico com log. 4xx devolve `{ message: error.message }`.
+  - `common/responses/http-response.ts`: `HttpResponse`, `ok`, `created` e `sendResponse(reply, response)`.
+  - `common/errors/http-error.ts`: `HttpError(statusCode, message)`, para quando o controller precisa de outra mensagem (o `cancel` do orders converte `InvalidOrderStatusTransitionError` em 409 com o id do pedido).
 - Só no payments: `infra/gateway/fake-payment-gateway.ts`.
 
 ### 3.2 Regra de dependência
@@ -199,10 +206,10 @@ Adapters de **entrada** (não implementam interface, chamam o caso de uso):
 
 | Serviço | Adapter de entrada | Use case |
 | --- | --- | --- |
-| orders | `buildApp(...)` (`infra/http/app.ts`): rotas da [seção 5](#5-rotas-http) | `createCustomer`, `getCustomer`, `createOrder`, `listOrders`, `getOrder`, `cancelOrder` |
+| orders | `CustomersController` e `OrdersController` (`infra/http/controllers/`), montados pelo `buildApp(...)`: rotas da [seção 5](#5-rotas-http) | `createCustomer`, `getCustomer`, `createOrder`, `listOrders`, `getOrder`, `cancelOrder` |
 | orders | `createPaymentApprovedHandler` (`orders.payment-approved`) | `MarkOrderAsPaidUseCase` |
 | orders | `createPaymentFailedHandler` (`orders.payment-failed`) | `CancelOrderUseCase` (com o `reason` do pagamento) |
-| invoices | `buildApp({ getInvoice, listInvoices })` | `GetInvoiceUseCase`, `ListInvoicesUseCase` |
+| invoices | `InvoicesController`, montado pelo `buildApp({ getInvoice, listInvoices })` | `GetInvoiceUseCase`, `ListInvoicesUseCase` |
 | invoices | `createOrderCreatedHandler` (`invoices.order-created`) | `CreateInvoiceFromOrderUseCase` |
 | invoices | `createPaymentApprovedHandler` (`invoices.payment-approved`) | `MarkInvoiceAsPaidUseCase` |
 | invoices | `createOrderCanceledHandler` (`invoices.order-canceled`) | `CancelInvoiceUseCase` |
@@ -854,7 +861,7 @@ Checklist na ordem em que o trabalho deve ser feito. Pule os passos que a featur
    - Repositório ou consulta Drizzle em `src/infra/db/`, com schema registrado em `schema/index.ts`. Teste em `test/infra/db/` contra o banco `*_test`.
    - Evento publicado: grave no outbox dentro do unit of work (validando com o schema do contrato) e adicione o tipo em `infra/messaging/routing-keys.ts`.
 6. **Adapter de entrada + teste**:
-   - Rota em `src/infra/http/app.ts`, recebendo o use case como `Pick<XxxUseCase, "execute">`. Teste em `test/infra/http/` com `app.inject`.
+   - Rota: schema em `infra/http/schemas/`, método no controller do recurso (recebendo o use case como `Pick<XxxUseCase, "execute">` no construtor) e a rota em `infra/http/routes/`. Recurso novo: controller + `app.register(xxxRoutes(new XxxController(useCaseA, useCaseB)))` no `app.ts`. Erro de domínio novo que chega à rota: adicione em `common/errors/domain-error-statuses.ts`. Teste em `test/infra/http/` com `app.inject`.
    - Ou handler em `src/infra/messaging/handlers/<evento>.handler.ts`, validando `payload.data` com `safeParse` e lançando `InvalidMessageError` se falhar. Decida quais erros do use case são permanentes e converta-os com `toPermanentError`. Declare as filas com `declareConsumerQueues` em `topology.ts` e registre o handler com `startConsumer` no `startConsumers` de `bootstrap/messaging.ts`. O consumidor precisa ser idempotente.
 7. **Ligar no `bootstrap/`**: instancie o adapter concreto e o use case em `createUseCases()` (`bootstrap/use-cases.ts`); a rota recebe o use case pelo `buildApp(useCases)` e o consumer pelo `startConsumers(useCases)`. O import do OpenTelemetry continua na primeira linha do `server.ts`.
 8. **Migration**: gere com `drizzle-kit generate` (ver [9.6](#96-migrations)) e aplique no banco de dev (ver [9.2](#92-passo-a-passo-do-zero)). No banco de teste, o `globalSetup` do Vitest aplica a migration sozinho.
