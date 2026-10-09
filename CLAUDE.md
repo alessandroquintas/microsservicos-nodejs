@@ -11,7 +11,7 @@ Monorepo (npm workspaces), Node.js + TypeScript (Fastify 5, Drizzle/pg, amqplib,
 - `services/payments` (:3335, Postgres :5484): consome `InvoiceCreated`, cobra no `FakePaymentGateway` (`PAYMENT_APPROVAL_RATE`, 0 a 1) e publica `PaymentApproved` ou `PaymentFailed`. Só `/health`.
 - `packages/contracts`: schemas zod das mensagens, `EVENTS_EXCHANGE`, tipos de evento e routing keys.
 - `packages/messaging`: `connectWithRetry`, `startConsumer` + `InvalidMessageError`, `declareConsumerQueues` e `OutboxRelay` com a porta `OutboxStore` (ARCHITECTURE.md §4.6).
-- `docker/kong`: gateway (:8000, `/orders`, `/customers`, `/invoices`). `infra/`: Pulumi, **fora** dos workspaces e ainda sem o payments.
+- `docker/kong`: gateway (:8000, `/orders`, `/customers`, `/invoices`). `infra/`: Pulumi (orders, invoices, payments, rabbitmq e kong no ECS Fargate; o payments sem load balancer), **fora** dos workspaces.
 
 ## Comandos
 

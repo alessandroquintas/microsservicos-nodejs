@@ -27,7 +27,7 @@ flowchart LR
     payments <-->|events| rabbit
 ```
 
-Os três serviços exportam traces via OpenTelemetry (`@opentelemetry/auto-instrumentations-node/register`, importado na primeira linha de cada `server.ts`). No ambiente local, o destino é o Jaeger do `docker-compose.yml` da raiz. Na AWS, é o Grafana Cloud (configurado em `infra/src/services/*.ts`; o payments ainda não está no Pulumi, ver [12](#12-limitações-conhecidas)).
+Os três serviços exportam traces via OpenTelemetry (`@opentelemetry/auto-instrumentations-node/register`, importado na primeira linha de cada `server.ts`). No ambiente local, o destino é o Jaeger do `docker-compose.yml` da raiz. Na AWS, é o Grafana Cloud (configurado em `infra/src/services/*.ts`).
 
 ### 1.1 Saga do pedido
 
@@ -106,7 +106,7 @@ microservices-nodejs/
 | `services/` | Um diretório por microsserviço. Cada um tem `src/`, `test/`, `Dockerfile`, um `docker-compose.yml` com o próprio Postgres, `drizzle.config.ts`, `vitest.config.ts`, `.env.example` e `.env.test`. |
 | `packages/` | Código compartilhado entre os serviços: `contracts` (formato das mensagens) e `messaging` (infraestrutura técnica de mensageria, sem banco). |
 | `docker/` | Imagem do Kong. O `startup.sh` usa `envsubst` para gerar `/kong/config.yaml` a partir de `config.template.yaml`, substituindo `ORDERS_SERVICE_URL` e `INVOICES_SERVICE_URL`. |
-| `infra/` | Infraestrutura como código (Pulumi + `@pulumi/awsx`): cluster ECS, um ALB e um NLB, repositórios ECR, build e push das imagens e os serviços Fargate de orders, invoices, rabbitmq e kong. |
+| `infra/` | Infraestrutura como código (Pulumi + `@pulumi/awsx`): cluster ECS, um ALB e um NLB, repositórios ECR, build e push das imagens e os serviços Fargate de orders, invoices, payments, rabbitmq e kong. |
 | `.github/` | CI no GitHub Actions (ver [8.4](#84-ci)). |
 
 ### npm workspaces
@@ -753,8 +753,6 @@ O `BROKER_URL` local não tem credenciais, então o amqplib usa o usuário padr�
 
 O deploy fica em `infra/`, um projeto **Pulumi** em TypeScript (`@pulumi/awsx` classic + `@pulumi/docker-build`) para a AWS. O projeto se chama `microsservico-node-infra` e usa a stack `dev` (`Pulumi.dev.yaml`, `aws:region: us-east-1`). Ele não é workspace npm: tem `package.json` e `package-lock.json` próprios, então rode `npm install` dentro de `infra/`.
 
-> **O payments ainda não está no Pulumi** (ver [12](#12-limitações-conhecidas)). As tabelas abaixo descrevem o que existe hoje: orders, invoices, rabbitmq e kong.
-
 ### 10.1 O que o Pulumi cria
 
 | Recurso | Arquivo | Detalhes |
@@ -762,9 +760,10 @@ O deploy fica em `infra/`, um projeto **Pulumi** em TypeScript (`@pulumi/awsx` c
 | Cluster ECS | `src/cluster.ts` | `awsx.classic.ecs.Cluster("app-cluster")` |
 | Application Load Balancer | `src/load-balancer.ts` | `app-lb`, com os security groups do cluster |
 | Network Load Balancer | `src/load-balancer.ts` | `net-lb`, nas subnets públicas da VPC do cluster |
-| Repositórios ECR + imagens | `src/images/{orders,invoices,kong}.ts` | `app-orders-ecr`, `app-invoices-ecr`, `app-kong-ecr` (`forceDelete: true`) |
+| Repositórios ECR + imagens | `src/images/{orders,invoices,payments,kong}.ts` | `app-orders-ecr`, `app-invoices-ecr`, `app-payments-ecr`, `app-kong-ecr` (`forceDelete: true`) |
 | Fargate `fargate-orders` | `src/services/orders.ts` | 256 CPU / 512 MB. ALB listener e target group na porta 3333, health check `GET /health` |
 | Fargate `fargate-invoices` | `src/services/invoices.ts` | 256 CPU / 512 MB. ALB na porta 3334, health check `GET /health` |
+| Fargate `fargate-payments` | `src/services/payments.ts` | 256 CPU / 512 MB. **Sem load balancer**: só `containerPort: 3335`, sem target group nem listener, porque o payments não recebe tráfego HTTP externo (só consome e publica eventos) |
 | Fargate `fargate-rabbitmq` | `src/services/rabbitmq.ts` | imagem pública `rabbitmq:3-management`, 512 CPU / 1024 MB. AMQP 5672 pelo **NLB** (TCP). Management UI 15672 pelo ALB |
 | Fargate `fargate-kong` | `src/services/kong.ts` | 256 CPU / 512 MB. ALB porta **80 → 8000** (proxy), 8002 (Admin GUI), 8001 (Admin API). Container expõe também 8100 (Status API) |
 
@@ -772,23 +771,24 @@ Todos os serviços usam `desiredCount: 1` e `waitForSteadyState: false`.
 
 O Kong recebe `ORDERS_SERVICE_URL` / `INVOICES_SERVICE_URL` apontando para o hostname e a porta dos listeners do ALB dos serviços. O `startup.sh` substitui esses valores no `config.template.yaml`, como no ambiente local.
 
-O orders e o invoices recebem:
+O orders, o invoices e o payments recebem:
 
 - `BROKER_URL`, montado com usuário, senha e o endpoint do NLB;
-- `DATABASE_URL`;
+- `DATABASE_URL` (um banco por serviço);
 - as variáveis `OTEL_*`, com `OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf`, apontando para o Grafana Cloud.
+
+O payments recebe também `PORT=3335` e `PAYMENT_APPROVAL_RATE` (config `paymentApprovalRate`). O orders e o invoices não recebem `PORT`: usam o padrão do código e do Dockerfile (3333 e 3334). Sem rota no Kong nem listener no ALB, o payments só é observável pelos traces, pelos logs da task e pelo efeito nos pedidos e nas faturas.
 
 **O Pulumi não cria bancos Postgres.** As URLs dos bancos são recebidas por config e apontam para uma instância externa, que precisa ser acessível a partir do Fargate.
 
-Saídas exportadas em `infra/index.ts`: `ordersId`, `ordersUrl`, `invoiceId`, `invoiceUrl`, `rabbitMQId`, `rabbitMQAdminUrl`, `kongId`, `kongUIUrl`.
+Saídas exportadas em `infra/index.ts`: `ordersId`, `ordersUrl`, `invoiceId`, `invoiceUrl`, `paymentsId`, `rabbitMQId`, `rabbitMQAdminUrl`, `kongId`, `kongUIUrl`. Como todos os listeners HTTP estão no mesmo ALB e a porta 80 é o proxy do Kong, `ordersUrl` (`http://<hostname do ALB>`, sem porta) é na prática a URL base do gateway.
 
 ### 10.2 Build das imagens
 
 O build é feito pelo próprio `pulumi up` (`docker.Image` do `@pulumi/docker-build`, `platforms: ["linux/amd64"]`, `push: true`, tag `:latest` no ECR). Por isso, a máquina que roda o deploy precisa do Docker.
 
-- **orders / invoices**: `context.location: ".."` (a **raiz do repositório**) e `dockerfile.location: "../services/<serviço>/Dockerfile"`. O contexto precisa ser a raiz porque o Dockerfile copia o `package-lock.json` da raiz, os `package.json` de todos os workspaces, `packages/contracts` e `packages/messaging`. Em seguida, roda `npm ci --omit=dev --workspace=@microservices/<serviço>`. O `.dockerignore` da raiz exclui `node_modules`, `.env*`, `test`, `infra`, `docker` etc.
+- **orders / invoices / payments**: `context.location: ".."` (a **raiz do repositório**) e `dockerfile.location: "../services/<serviço>/Dockerfile"`. O contexto precisa ser a raiz porque o Dockerfile copia o `package-lock.json` da raiz, os `package.json` de todos os workspaces, `packages/contracts` e `packages/messaging`. Em seguida, roda `npm ci --omit=dev --workspace=@microservices/<serviço>`. O `.dockerignore` da raiz exclui `node_modules`, `.env*`, `test`, `infra`, `docker` etc.
 - **kong**: `context.location: "../docker/kong"`, usando o `Dockerfile` dessa pasta.
-- **payments**: tem `services/payments/Dockerfile` no mesmo padrão (`docker build -f services/payments/Dockerfile .` na raiz), mas o Pulumi ainda não o constrói.
 - As imagens dos serviços rodam `node --experimental-strip-types --no-warnings src/server.ts`, sem etapa de build TypeScript, como usuário não-root `api`.
 
 ### 10.3 Secrets e configuração
@@ -799,12 +799,14 @@ O build é feito pelo próprio `pulumi up` (`docker.Image` do `@pulumi/docker-bu
 | --- | --- | --- |
 | `ordersDatabaseUrl` | `config.requireSecret` | `DATABASE_URL` do orders |
 | `invoicesDatabaseUrl` | `config.requireSecret` | `DATABASE_URL` do invoices |
+| `paymentsDatabaseUrl` | `config.requireSecret` | `DATABASE_URL` do payments |
 | `otlpHeaders` | `config.requireSecret` | `OTEL_EXPORTER_OTLP_HEADERS` (autenticação no Grafana Cloud) |
 | `brokerUsername` | `config.requireSecret` | `RABBITMQ_DEFAULT_USER` e `BROKER_URL` |
 | `brokerPassword` | `config.requireSecret` | `RABBITMQ_DEFAULT_PASS` e `BROKER_URL` |
 | `otlpEndpoint` | `config.require` (não secreto) | `OTEL_EXPORTER_OTLP_ENDPOINT` |
+| `paymentApprovalRate` | `config.get` (não secreto, opcional, padrão `"0.8"`) | `PAYMENT_APPROVAL_RATE` do payments |
 
-- Os secrets ficam criptografados em `Pulumi.dev.yaml` (`secure: ...`) e são definidos com `pulumi config set --secret <chave> <valor>`.
+- Os secrets ficam criptografados em `Pulumi.dev.yaml` (`secure: ...`) e são definidos com `pulumi config set --secret <chave> <valor>`. As chaves não secretas usam `pulumi config set <chave> <valor>`. A região vem de `aws:region` (`us-east-1`).
 - Nenhum valor deve ir para o código nem para a documentação.
 - No ECS, os valores são passados no `environment` da task definition.
 
@@ -822,20 +824,21 @@ healthCheck: {
 
 A porta 8100 é habilitada por `KONG_STATUS_LISTEN=0.0.0.0:8100` (tanto no `docker-compose.yml` quanto em `src/services/kong.ts`). Na porta 8000, o proxy só responde às rotas `/orders` e `/invoices` e devolve 404 para `/`. Já o `/status/ready` responde 200 quando o Kong carregou a configuração declarativa e está pronto para receber tráfego.
 
-### 10.5 Deploy efêmero
+### 10.5 Deploy manual e efêmero
 
-A stack sobe recursos cobrados por hora: dois load balancers, quatro tarefas Fargate e o RabbitMQ em Fargate. A recomendação é usar deploy **efêmero**: subir para demonstrar ou validar e destruir logo depois.
+A stack sobe recursos cobrados por hora: dois load balancers (ALB e NLB) e cinco tasks Fargate (orders, invoices, payments, rabbitmq e kong), cada uma com IP público. Não há pipeline de deploy: o fluxo é manual e **efêmero**, subir para demonstrar ou validar e destruir logo depois. O passo a passo com todos os comandos está na seção "Deploy na AWS" do [README](README.md#deploy-na-aws).
 
-```bash
-cd infra
-npm install
-pulumi stack select dev
-pulumi up        # build + push das imagens e criação dos recursos
-# ... demonstração / testes usando as URLs exportadas ...
-pulumi destroy   # remove tudo; os repositórios ECR têm forceDelete: true
-```
+Pré-requisitos: AWS CLI com login (`aws sso login` ou credenciais equivalentes), Pulumi CLI com login no Pulumi Cloud, Docker rodando (para o build) e três bancos Postgres externos (o projeto usa o Neon).
 
-Pré-requisitos: Pulumi CLI, credenciais AWS configuradas, Docker local (para o build) e os secrets da stack definidos. O banco Postgres externo não é afetado pelo `destroy`.
+1. Autenticar na AWS e conferir com `aws sts get-caller-identity`.
+2. `cd infra && npm install && pulumi stack select dev`.
+3. Definir as chaves da [10.3](#103-secrets-e-configuração) com `pulumi config set` (as secretas com `--secret`).
+4. Aplicar as migrations em cada banco externo com `DATABASE_URL=<url> npm run db:migrate -w @microservices/<serviço>` (na raiz) e, se quiser o customer de exemplo, `npm run db:seed -w @microservices/orders`. O Pulumi não roda migrations.
+5. `pulumi preview` para conferir o plano e `pulumi up` para criar (build e push das imagens + recursos).
+6. `pulumi stack output` para obter as URLs. As chamadas à API vão para `ordersUrl`, a porta 80 do ALB (proxy do Kong).
+7. `pulumi destroy` para remover tudo. Os repositórios ECR têm `forceDelete: true`; os bancos externos não são afetados.
+
+Se o Pulumi falhar com `Failed to refresh cached SSO credentials` (às vezes acompanhado de erros secundários como `grpc: the client connection is closing`), a sessão SSO expirou: refaça o `aws sso login` (com `--use-device-code` no WSL).
 
 ---
 
@@ -864,7 +867,6 @@ No fim, rode `npm run typecheck` e `npm test` na raiz.
 
 Esta seção só descreve o comportamento atual. Não há propostas de solução aqui.
 
-- **Infra do Pulumi sem o payments.** `infra/` cria só orders, invoices, rabbitmq e kong. Não há imagem ECR, serviço Fargate nem secret de banco para o payments, então a saga não completa na AWS.
 - **Sem compensação de pagamento.** Se o pedido for cancelado pela rota depois do `InvoiceCreated` e antes de o payments processar a fatura, o payments cobra mesmo assim. O `PaymentApproved` resultante vai para a DLQ no orders (`InvalidOrderStatusTransitionError`) e no invoices (`InvalidInvoiceStatusTransitionError`), e não há estorno.
 - **Corrida entre pagamento e cancelamento.** `MarkOrderAsPaidUseCase` e `CancelOrderUseCase` leem o pedido, mudam o status em memória e fazem upsert, sem lock nem verificação de versão. Se o `PaymentApproved` e o `POST /orders/:id/cancel` chegarem ao mesmo tempo, a última escrita vence.
 - **Cobrança antes do commit.** O `ProcessPaymentUseCase` chama o gateway antes da transação que grava o pagamento. Se o processo cair entre os dois, a mensagem é reentregue e a cobrança acontece de novo. Com o gateway falso isso não tem efeito, mas um gateway real precisaria de chave de idempotência.
