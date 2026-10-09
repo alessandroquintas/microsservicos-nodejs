@@ -79,22 +79,46 @@ http POST $BASE_URL/orders/<id de um pedido pago>/cancel            # 409
 
 ## 5. Traces no Grafana Cloud
 
-Os serviços exportam por OTLP com estes nomes (`OTEL_SERVICE_NAME` em `infra/src/services/*.ts`): `app-orders`, `app-invoices` e `app-payments`. O Kong não é instrumentado, então o trace começa no orders.
+Os serviços exportam por OTLP com estes nomes (`OTEL_SERVICE_NAME` em `infra/src/services/*.ts`): `app-orders`, `app-invoices` e `app-payments`. O Kong não é instrumentado, então o trace começa no serviço.
 
-No Grafana Cloud, abra **Explore**, escolha a fonte de traces (Tempo, `grafanacloud-<stack>-traces`) e use **TraceQL**:
+Os serviços só enviam traces, sem métricas. Por isso a página **Observability** (Services, Databases...) do Grafana fica vazia. Os traces aparecem em **Explore** e em **Drilldown → Traces**.
+
+No **Explore**, escolha a fonte de traces (Tempo, `grafanacloud-<stack>-traces`) e use **TraceQL**:
 
 ```traceql
-# Trace de um pedido específico (o POST /orders grava o atributo order_id)
+# Requisição HTTP de um pedido específico (o POST /orders grava o atributo order_id)
 { span.order_id = "<ORDER_ID>" }
 
-# Tudo que passou pelo orders
+# Tudo que passou por um serviço
 { resource.service.name = "app-orders" }
 
-# Traces que atravessaram os três serviços
-{ resource.service.name = "app-orders" } && { resource.service.name = "app-payments" }
+# Etapas da saga: cada publicação do relay do outbox abre um trace
+{ name = "publish events" }
 
 # Só os erros
 { status = error }
 ```
 
-Num pedido pago, os spans passam por `app-orders`, `app-invoices` e `app-payments`: HTTP, queries no Postgres e publish/consume no RabbitMQ (`OrderCreated` → `InvoiceCreated` → `PaymentApproved`). Os traces levam alguns segundos para aparecer no Grafana.
+Os traces levam alguns segundos para aparecer.
+
+### Requisição HTTP
+
+Uma requisição que passa pelo Kong vira um trace com o span HTTP do Fastify e os spans do Postgres (`pg-pool.connect`, `pg.query`). Abaixo, um `GET /customers/:id` no orders:
+
+![Trace de um GET no app-orders com os spans do Postgres](images/customeer-tracer-01.png)
+
+Ao clicar no span, aparecem os atributos da requisição (método, `url.path`, status) e do recurso (`service.name`, host e versão do SDK):
+
+![Atributos do span HTTP e do recurso no app-orders](images/customer-trace-02.png)
+
+### Saga pelo RabbitMQ
+
+O relay do outbox publica os eventos fora da requisição HTTP. Por isso, o `POST /orders` e a saga ficam em traces separados: cada publicação do relay abre um trace `publish events`. A instrumentação do amqplib propaga o contexto na mensagem, e os consumidores dos outros serviços aparecem como filhos desse trace. Para ver a saga de um pedido, procure os traces `publish events` de cada serviço no mesmo minuto do pedido.
+
+Abaixo, o payments publica o `PaymentApproved`, e o invoices (`invoices.payment-approved process`) e o orders (`orders.payment-approved process`) consomem o evento e atualizam a fatura e o pedido no Postgres:
+
+![Trace do publish do PaymentApproved com o consumo no invoices e no orders](images/publish-events-tracer.png)
+
+Ao clicar num span consumidor, aparecem os atributos da mensagem: exchange (`messaging.destination`), routing key (`payment.approved`), id da mensagem e o serviço que consumiu:
+
+![Atributos do span consumidor orders.payment-approved process](images/publish-events-02.png)

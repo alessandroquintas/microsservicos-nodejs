@@ -72,9 +72,25 @@ Topologia das filas, regras de retry, idempotência, rotas HTTP e deploy estão 
 
 ## Observabilidade
 
-Cada serviço carrega o auto-instrumentation do OpenTelemetry na primeira linha do `server.ts` e exporta os traces via OTLP para o Jaeger local, de modo que um pedido aparece como um único trace passando por orders, invoices e payments.
+Cada serviço carrega o auto-instrumentation do OpenTelemetry na primeira linha do `server.ts` e exporta os traces via OTLP para o Jaeger local. O contexto segue nas mensagens do RabbitMQ: cada publicação do relay do outbox abre um trace, e os consumidores de invoices, payments e orders aparecem nele. A requisição HTTP que criou o pedido fica num trace separado.
 
 ![Trace de um pedido no Jaeger atravessando orders, invoices e payments via RabbitMQ](docs/images/jaeger-saga.png)
+
+Na AWS, os traces vão para o Grafana Cloud (Explore → fonte `grafanacloud-*-traces`, ou Drilldown → Traces). Uma requisição pelo Kong mostra o span HTTP do Fastify e as queries no Postgres:
+
+![Trace de um GET no app-orders com os spans do Postgres no Grafana Cloud](docs/images/customeer-tracer-01.png)
+
+![Atributos do span HTTP e do recurso no app-orders](docs/images/customer-trace-02.png)
+
+Cada publicação do relay do outbox abre um trace `publish events`, com os consumidores dos outros serviços como filhos. Aqui o payments publica o `PaymentApproved`, e o invoices e o orders consomem o evento:
+
+![Trace do publish do PaymentApproved com o consumo no invoices e no orders no Grafana Cloud](docs/images/publish-events-tracer.png)
+
+Ao clicar num span consumidor, aparecem os atributos da mensagem: exchange (`messaging.destination`), routing key (`payment.approved`), id da mensagem e o serviço que consumiu:
+
+![Atributos do span consumidor orders.payment-approved process no Grafana Cloud](docs/images/publish-events-02.png)
+
+O passo a passo para gerar tráfego e encontrar os traces está em [docs/production-tests.md](docs/production-tests.md).
 
 ## Stack
 
