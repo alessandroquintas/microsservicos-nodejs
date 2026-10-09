@@ -20,6 +20,7 @@
   "dependencies": {
     "@fastify/cors": "^11.3.0",
     "@microservices/contracts": "^1.0.0",
+    "@microservices/messaging": "^1.0.0",
     "@opentelemetry/auto-instrumentations-node": "^0.80.0",
     "@opentelemetry/sdk-node": "^0.222.0",
     "@opentelemetry/sdk-trace-node": "^2.11.0",

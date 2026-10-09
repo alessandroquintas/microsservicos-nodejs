@@ -49,4 +49,25 @@ describe("OutboxOrderEventsPublisher", () => {
 
     expect(await db.select().from(schema.outboxEvents)).toHaveLength(0);
   });
+
+  it("stores OrderCanceled as a pending outbox event", async () => {
+    const message = { orderId: randomUUID(), reason: "Card declined" };
+
+    await sut.publishOrderCanceled(message);
+
+    const [row] = await db.select().from(schema.outboxEvents);
+    expect(row).toMatchObject({
+      type: "OrderCanceled",
+      payload: message,
+      publishedAt: null,
+    });
+  });
+
+  it("does not store an OrderCanceled that breaks the contract", async () => {
+    await expect(
+      sut.publishOrderCanceled({ orderId: "not-a-uuid", reason: "x" }),
+    ).rejects.toThrow();
+
+    expect(await db.select().from(schema.outboxEvents)).toHaveLength(0);
+  });
 });

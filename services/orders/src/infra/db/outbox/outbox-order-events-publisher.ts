@@ -1,6 +1,9 @@
 import {
+  ORDER_CANCELED_EVENT,
   ORDER_CREATED_EVENT,
+  orderCanceledMessageSchema,
   orderCreatedMessageSchema,
+  type OrderCanceledMessage,
   type OrderCreatedMessage,
 } from "@microservices/contracts";
 import type { OrderEventsPublisher } from "../../../application/ports/order-events-publisher.ts";
@@ -21,6 +24,16 @@ export class OutboxOrderEventsPublisher implements OrderEventsPublisher {
     await this.#db.insert(schema.outboxEvents).values({
       id: randomUUID(),
       type: ORDER_CREATED_EVENT,
+      payload,
+    });
+  }
+
+  async publishOrderCanceled(message: OrderCanceledMessage): Promise<void> {
+    const payload = orderCanceledMessageSchema.parse(message);
+
+    await this.#db.insert(schema.outboxEvents).values({
+      id: randomUUID(),
+      type: ORDER_CANCELED_EVENT,
       payload,
     });
   }

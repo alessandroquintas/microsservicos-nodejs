@@ -12,6 +12,7 @@ services:
           - https
         paths:
           - /orders
+          - /customers
         strip_path: false
 
   - name: app-invoices

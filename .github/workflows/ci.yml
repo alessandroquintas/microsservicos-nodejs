@@ -38,6 +38,20 @@ jobs:
           --health-timeout 5s
           --health-retries 10
 
+      payments-db:
+        image: postgres:16
+        env:
+          POSTGRES_USER: docker
+          POSTGRES_PASSWORD: docker
+          POSTGRES_DB: payments_test
+        ports:
+          - 5484:5432
+        options: >-
+          --health-cmd "pg_isready -U docker"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
     steps:
       - uses: actions/checkout@v4
 

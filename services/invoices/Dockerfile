@@ -8,8 +8,10 @@ FROM base AS deps
 
 COPY package.json package-lock.json ./
 COPY packages/contracts/package.json packages/contracts/
+COPY packages/messaging/package.json packages/messaging/
 COPY services/orders/package.json services/orders/
 COPY services/invoices/package.json services/invoices/
+COPY services/payments/package.json services/payments/
 
 RUN npm ci --omit=dev --workspace=@microservices/invoices
 
@@ -24,6 +26,7 @@ RUN addgroup --system --gid 1001 nodejs \
 
 COPY --from=deps --chown=api:nodejs /app ./
 COPY --chown=api:nodejs packages/contracts ./packages/contracts
+COPY --chown=api:nodejs packages/messaging ./packages/messaging
 COPY --chown=api:nodejs services/invoices ./services/invoices
 
 WORKDIR /app/services/invoices

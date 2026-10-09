@@ -1,5 +1,5 @@
 import amqp from "amqplib";
-import { connectWithRetry } from "./connect-with-retry.ts";
+import { connectWithRetry } from "@microservices/messaging";
 
 const BROKER_URL = process.env.BROKER_URL;
 

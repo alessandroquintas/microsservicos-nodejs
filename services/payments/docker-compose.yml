@@ -1,0 +1,22 @@
+name: app-payments
+
+services:
+  payments-pg:
+    image: postgres:16
+    ports:
+      - "5484:5432"
+    environment:
+      - POSTGRES_USER=docker
+      - POSTGRES_PASSWORD=docker
+      - POSTGRES_DB=payments
+    volumes:
+      - ./docker:/docker-entrypoint-initdb.d
+      - payments_pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U docker"]
+      interval: 2s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  payments_pg_data:
