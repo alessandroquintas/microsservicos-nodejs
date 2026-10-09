@@ -1,7 +1,7 @@
 import type { ConsumeMessage } from "amqplib";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createOrderCreatedHandler } from "../../../src/infra/messaging/handlers/order-created.handler.ts";
-import { InvalidMessageError } from "../../../src/infra/messaging/errors.ts";
+import { InvalidMessageError } from "@microservices/messaging";
 import { randomUUID } from "node:crypto";
 import type { OrderCreatedMessage } from "@microservices/contracts";
 
@@ -29,13 +29,15 @@ beforeEach(() => {
 });
 
 describe("handleOrderCreated", () => {
-  it("creates an invoice for the order", async () => {
+  it("creates an invoice with the order amount and customer", async () => {
     const data = validMessage();
 
     await sut(makeMessage(JSON.stringify({ data })));
 
     expect(createInvoiceFromOrder.execute).toHaveBeenCalledWith({
       orderId: data.orderId,
+      amountInCents: data.amount,
+      customer: data.customer,
     });
   });
 

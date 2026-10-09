@@ -7,4 +7,12 @@ export class InMemoryCustomersRepository implements CustomersRepository {
   async findById(id: string): Promise<CustomerEntity | null> {
     return this.items.find((customer) => customer.id === id) ?? null;
   }
+
+  async findByEmail(email: string): Promise<CustomerEntity | null> {
+    return this.items.find((customer) => customer.email === email) ?? null;
+  }
+
+  async save(customer: CustomerEntity): Promise<void> {
+    this.items.push(customer);
+  }
 }

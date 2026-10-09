@@ -1,7 +1,7 @@
 import type { ConsumeMessage } from "amqplib";
 import { orderCreatedMessageSchema } from "@microservices/contracts";
 import type { CreateInvoiceFromOrderUseCase } from "../../../application/use-cases/create-invoice-from-order.ts";
-import { InvalidMessageError } from "../errors.ts";
+import { InvalidMessageError } from "@microservices/messaging";
 
 type CreateInvoiceFromOrder = Pick<CreateInvoiceFromOrderUseCase, "execute">;
 
@@ -31,6 +31,12 @@ export function createOrderCreatedHandler(
       throw new InvalidMessageError(`Invalid OrderCreated message: ${issues}`);
     }
 
-    await createInvoiceFromOrder.execute({ orderId: result.data.orderId });
+    const { orderId, amount, customer } = result.data;
+
+    await createInvoiceFromOrder.execute({
+      orderId,
+      amountInCents: amount,
+      customer,
+    });
   };
 }

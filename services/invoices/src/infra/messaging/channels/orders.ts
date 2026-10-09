@@ -1,5 +1,5 @@
 import { broker } from "../client.ts";
-import { setupTopology } from "../topology.ts";
+import { setupOrderQueues } from "../topology.ts";
 
 export const ordersChannel = await broker.createChannel();
 
@@ -7,4 +7,4 @@ ordersChannel.on("error", (error) => {
   console.error("RabbitMQ channel error", error);
 });
 
-await setupTopology(ordersChannel);
+export const orderQueues = await setupOrderQueues(ordersChannel);
