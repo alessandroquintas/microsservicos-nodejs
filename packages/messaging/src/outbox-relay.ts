@@ -1,73 +1,74 @@
 import type { ConfirmChannel } from "amqplib";
-import type { db as database } from "../db/client.ts";
-import { schema } from "../db/schema/index.ts";
-import {
-  EVENTS_EXCHANGE,
-  ORDER_CREATED_EVENT,
-  ORDER_CREATED_ROUTING_KEY,
-} from "@microservices/contracts";
-import { asc, eq, isNull } from "drizzle-orm";
 
-type Database = typeof database;
+export type OutboxEvent = {
+  id: string;
+  type: string;
+  payload: unknown;
+  attempts: number;
+};
+
+export type OutboxBatch = {
+  events: OutboxEvent[];
+  markAsPublished(event: OutboxEvent): Promise<void>;
+  markAsFailed(event: OutboxEvent, error: string): Promise<void>;
+};
+
+// Porta implementada por cada serviço sobre a própria tabela de outbox. A
+// implementação abre a transação, busca até `limit` eventos pendentes com
+// FOR UPDATE SKIP LOCKED e entrega o lote ao handler. `markAsPublished` grava
+// published_at e incrementa attempts; `markAsFailed` incrementa attempts e grava
+// last_error, mantendo o evento pendente.
+export interface OutboxStore {
+  processPending<T>(
+    limit: number,
+    handler: (batch: OutboxBatch) => Promise<T>,
+  ): Promise<T>;
+}
+
 type PublishChannel = Pick<ConfirmChannel, "publish" | "waitForConfirms">;
-type OutboxEvent = typeof schema.outboxEvents.$inferSelect;
 
-const ROUTING_KEY_BY_EVENT_TYPE: Record<string, string> = {
-  [ORDER_CREATED_EVENT]: ORDER_CREATED_ROUTING_KEY,
+type OutboxRelayOptions = {
+  exchange: string;
+  routingKeys: Record<string, string>;
+  batchSize?: number;
 };
 
 export class OutboxRelay {
-  #db: Database;
+  #store: OutboxStore;
   #channel: PublishChannel;
+  #exchange: string;
+  #routingKeys: Record<string, string>;
   #batchSize: number;
   #timer: NodeJS.Timeout | undefined;
   #running = false;
   #currentTick: Promise<void> | undefined;
 
   constructor(
-    db: Database,
+    store: OutboxStore,
     channel: PublishChannel,
-    options: { batchSize?: number } = {},
+    options: OutboxRelayOptions,
   ) {
-    this.#db = db;
+    this.#store = store;
     this.#channel = channel;
+    this.#exchange = options.exchange;
+    this.#routingKeys = options.routingKeys;
     this.#batchSize = options.batchSize ?? 50;
   }
 
   async publishPending(): Promise<number> {
-    return this.#db.transaction(async (tx) => {
-      const events = await tx
-        .select()
-        .from(schema.outboxEvents)
-        .where(isNull(schema.outboxEvents.publishedAt))
-        .orderBy(asc(schema.outboxEvents.createdAt))
-        .limit(this.#batchSize)
-        .for("update", { skipLocked: true });
-
+    return this.#store.processPending(this.#batchSize, async (batch) => {
       let published = 0;
 
-      for (const event of events) {
+      for (const event of batch.events) {
         try {
           await this.#publish(event);
-
-          await tx
-            .update(schema.outboxEvents)
-            .set({
-              publishedAt: new Date(),
-              attempts: event.attempts + 1,
-              lastError: null,
-            })
-            .where(eq(schema.outboxEvents.id, event.id));
-
+          await batch.markAsPublished(event);
           published++;
         } catch (error) {
-          await tx
-            .update(schema.outboxEvents)
-            .set({
-              attempts: event.attempts + 1,
-              lastError: error instanceof Error ? error.message : String(error),
-            })
-            .where(eq(schema.outboxEvents.id, event.id));
+          await batch.markAsFailed(
+            event,
+            error instanceof Error ? error.message : String(error),
+          );
         }
       }
 
@@ -104,7 +105,7 @@ export class OutboxRelay {
   }
 
   async #publish(event: OutboxEvent): Promise<void> {
-    const routingKey = ROUTING_KEY_BY_EVENT_TYPE[event.type];
+    const routingKey = this.#routingKeys[event.type];
 
     if (!routingKey) {
       throw new Error(
@@ -113,7 +114,7 @@ export class OutboxRelay {
     }
 
     this.#channel.publish(
-      EVENTS_EXCHANGE,
+      this.#exchange,
       routingKey,
       Buffer.from(JSON.stringify({ data: event.payload })),
       {

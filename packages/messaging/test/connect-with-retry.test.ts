@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { connectWithRetry } from "../../../src/infra/messaging/connect-with-retry.ts";
+import { connectWithRetry } from "../src/connect-with-retry.ts";
 
 const waits: number[] = [];
 const sleep = async (ms: number) => {

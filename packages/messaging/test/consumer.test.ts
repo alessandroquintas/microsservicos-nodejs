@@ -3,8 +3,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   startConsumer,
   type Consumer,
-} from "../../../src/infra/messaging/consumer.ts";
-import { InvalidMessageError } from "../../../src/infra/messaging/errors.ts";
+} from "../src/consumer.ts";
+import { InvalidMessageError } from "../src/errors.ts";
 
 const QUEUE = "invoices.order-created";
 const DLQ = "invoices.order-created.dlq";
