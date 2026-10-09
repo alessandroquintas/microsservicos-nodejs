@@ -156,12 +156,14 @@ Dentro de `infra/`, a organização é a mesma nos três serviços:
 - `infra/messaging/routing-keys.ts`: `ROUTING_KEY_BY_EVENT_TYPE`, o mapa de tipo de evento do outbox para routing key, passado ao `OutboxRelay`.
 - `infra/messaging/handlers/*.handler.ts`: um handler por evento consumido, e `permanent-errors.ts` (`toPermanentError`, ver [4.3](#43-validação-retry-e-dlq)).
 - `infra/http/` (orders e invoices; o payments só tem `app.ts` com o `/health`):
-  - `app.ts`: `buildApp(deps)` cria o Fastify com `fastify-type-provider-zod`, o error handler, o `/health`, instancia os controllers e registra as rotas. Não declara rota de negócio.
-  - `schemas/<recurso>-schemas.ts`: schemas zod de body, params e querystring, com os tipos inferidos (`CreateOrderBody`, `ListInvoicesQuery`...).
-  - `routes/<recurso>-routes.ts`: `xxxRoutes(controller)` devolve um `FastifyPluginAsyncZod` que liga método + URL + schema ao método do controller, via `sendResponse(reply, ...)`. Nada de regra aqui.
+  - `app.ts`: `buildApp(deps)` cria o Fastify com `fastify-type-provider-zod`, o error handler, o Swagger, o `/health`, instancia os controllers e registra as rotas. Não declara rota de negócio.
+  - `swagger.ts`: `registerSwagger(app)` registra o `@fastify/swagger` (OpenAPI 3.1 gerado dos schemas zod pelo `jsonSchemaTransform`) e o `@fastify/swagger-ui` em `/docs` (spec em `/docs/json`). É chamado antes das rotas, porque o spec é montado no hook `onRoute`; o `/health`, declarado direto na instância, fica fora da doc.
+  - `schemas/<recurso>-schemas.ts`: schemas zod de body, params e querystring, com os tipos inferidos (`CreateOrderBody`, `ListInvoicesQuery`...), e os de resposta (`orderResponseSchema`, `invoicesPageResponseSchema`...). Os de resposta não revalidam formato de dado gerado pelo servidor (ids são `z.string()`).
+  - `routes/<recurso>-routes.ts`: `xxxRoutes(controller)` devolve um `FastifyPluginAsyncZod` que liga método + URL + schema (`tags`, `summary`, entrada e `response` por status) ao método do controller, via `sendResponse(reply, ...)`. Nada de regra aqui.
   - `controllers/<recurso>-controller.ts`: `XxxController` recebe os use cases no construtor, como argumentos posicionais (`type GetInvoice = Pick<GetInvoiceUseCase, "execute">`), guarda em campos `#`, traduz a entrada validada para os args do use case e devolve `HttpResponse` (`ok`/`created`). Não conhece Fastify.
   - `common/errors/error-handler.ts`: `createErrorHandler(statuses)`. Erro mapeado em `common/errors/domain-error-statuses.ts` (`[ErrorClass, status]`), erro com `statusCode` (validação do Fastify, `HttpError`) ou 500 genérico com log. 4xx devolve `{ message: error.message }`.
   - `common/responses/http-response.ts`: `HttpResponse`, `ok`, `created` e `sendResponse(reply, response)`.
+  - `common/schemas/error-response-schema.ts`: `errorResponseSchema` (`{ message }`), usado nos status de erro do `response` das rotas.
   - `common/errors/http-error.ts`: `HttpError(statusCode, message)`, para quando o controller precisa de outra mensagem (o `cancel` do orders converte `InvalidOrderStatusTransitionError` em 409 com o id do pedido).
 - Só no payments: `infra/gateway/fake-payment-gateway.ts`.
 
@@ -425,6 +427,8 @@ Fica em `packages/messaging`: código técnico de mensageria, independente de ba
 
 Erros de validação do zod respondem 400 com `{ message }`. O error handler (orders e invoices) devolve a mensagem do erro para status < 500 e `{ message: "Internal server error" }` para 500, registrando os detalhes só no `console.error`. `amount` é sempre em centavos.
 
+Cada serviço com API serve a doc no próprio host: Swagger UI em `/docs` e o OpenAPI em `/docs/json` (orders em `:3333`, invoices em `:3334`). O Kong não roteia `/docs`. O `response` das rotas também passa pelo `serializerCompiler`: uma resposta fora do schema vira 500, e campos não declarados são removidos. Rota nova ou campo novo na resposta precisa entrar no schema de resposta.
+
 **orders** (`:3333`, via Kong em `:8000`):
 
 | Rota | Entrada | Respostas |
@@ -551,7 +555,7 @@ Os serviços rodam TypeScript direto no Node (`node --experimental-strip-types s
 
 ### Outros padrões
 
-- Validação de entrada HTTP com zod via `fastify-type-provider-zod` (`schema: { body, querystring, params }`).
+- Validação de entrada HTTP com zod via `fastify-type-provider-zod` (`schema: { body, querystring, params }`), e `response` por status, que alimenta o OpenAPI (`/docs`) e a serialização.
 - Variáveis de ambiente obrigatórias são checadas no carregamento do módulo, com `throw new Error(...)` (`infra/db/client.ts`, `infra/messaging/client.ts`, `drizzle.config.ts`).
 - Os testes usam `sut` ("system under test") para o objeto testado.
 

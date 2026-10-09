@@ -136,7 +136,7 @@ npm run dev -w @microservices/orders      # :3333
 
 Cada serviço declara as próprias filas ao subir, e o RabbitMQ descarta eventos publicados antes de existir a fila. Numa instalação nova, espere os três subirem antes de criar o primeiro pedido.
 
-Interfaces úteis: RabbitMQ Management em http://127.0.0.1:15672 (`guest`/`guest`, padrão local) e Jaeger em http://127.0.0.1:16686.
+Interfaces úteis: RabbitMQ Management em http://127.0.0.1:15672 (`guest`/`guest`, padrão local) e Jaeger em http://127.0.0.1:16686. A documentação das rotas (Swagger UI) fica em http://127.0.0.1:3333/docs (orders) e http://127.0.0.1:3334/docs (invoices), com o OpenAPI em `/docs/json`.
 
 ## Deploy na AWS
 
