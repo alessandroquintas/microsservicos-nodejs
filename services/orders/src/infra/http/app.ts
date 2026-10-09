@@ -13,6 +13,7 @@ import type { ListOrdersUseCase } from "../../application/use-cases/list-orders.
 import type { CancelOrderUseCase } from "../../application/use-cases/cancel-order.ts";
 import { DOMAIN_ERROR_STATUSES } from "./common/errors/domain-error-statuses.ts";
 import { createErrorHandler } from "./common/errors/error-handler.ts";
+import { registerSwagger } from "./swagger.ts";
 import { CustomersController } from "./controllers/customers-controller.ts";
 import { OrdersController } from "./controllers/orders-controller.ts";
 import { customersRoutes } from "./routes/customers-routes.ts";
@@ -42,6 +43,7 @@ export function buildApp({
   app.setErrorHandler(createErrorHandler(DOMAIN_ERROR_STATUSES));
 
   app.register(fastifyCors, { origin: "*" });
+  registerSwagger(app);
 
   app.get("/health", () => {
     return "Ok";

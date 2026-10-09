@@ -475,3 +475,18 @@ describe("POST /orders/:id/cancel", () => {
     expect(cancelOrder.execute).not.toHaveBeenCalled();
   });
 });
+
+describe("GET /docs/json", () => {
+  it("documents the business routes in the OpenAPI spec", async () => {
+    const response = await app.inject({ method: "GET", url: "/docs/json" });
+
+    expect(response.statusCode).toBe(200);
+    expect(Object.keys(response.json().paths)).toEqual([
+      "/customers",
+      "/customers/{id}",
+      "/orders",
+      "/orders/{id}",
+      "/orders/{id}/cancel",
+    ]);
+  });
+});
