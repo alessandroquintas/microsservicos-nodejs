@@ -133,14 +133,14 @@ O `package.json` da raiz declara:
 
 ### 3.1 Camadas
 
-Cada serviço segue a estrutura `src/{domain,application,infra}` + `src/server.ts`.
+Cada serviço segue a estrutura `src/{domain,application,infra,bootstrap}` + `src/server.ts`.
 
 | Camada | O que pode conter | orders | invoices | payments |
 | --- | --- | --- | --- | --- |
 | `domain/` | Entidades, value objects, erros de domínio e as **interfaces de repositório**, com uma subpasta por agregado. Código TypeScript puro. | `order/`, `customer/`, `shared/money.ts` | `invoice/`, `shared/money.ts` | `payment/`, `shared/money.ts` |
 | `application/` | Casos de uso (`use-cases/`), portas que não são de persistência (`ports/`) e portas de leitura (`queries/`). | `create-order`, `create-customer`, `get-customer`, `get-order`, `list-orders`, `mark-order-as-paid`, `cancel-order`; `ports/{order-events-publisher,unit-of-work}.ts`; `queries/orders-query.ts` | `create-invoice-from-order`, `mark-invoice-as-paid`, `cancel-invoice`, `get-invoice`, `list-invoices`; `ports/{invoice-events-publisher,unit-of-work}.ts`; `queries/invoices-query.ts` | `process-payment`; `ports/{payment-gateway,payment-events-publisher,unit-of-work}.ts` |
 | `infra/` | Adapters: banco (Drizzle), HTTP (Fastify), mensageria (amqplib + `@microservices/messaging`), gateway externo. | `db/`, `http/`, `messaging/` | `db/`, `http/`, `messaging/` | `db/`, `http/`, `messaging/`, `gateway/` |
-| `server.ts` | Composition root: instancia adapters e use cases e liga tudo. | `src/server.ts` | `src/server.ts` | `src/server.ts` |
+| `bootstrap/` + `server.ts` | Composition root: instancia adapters e use cases e liga tudo (ver [3.4](#34-bootstrap-e-serverts-como-composition-root)). | `src/bootstrap/`, `src/server.ts` | `src/bootstrap/`, `src/server.ts` | `src/bootstrap/`, `src/server.ts` |
 
 Dentro de `infra/`, a organização é a mesma nos três serviços:
 
@@ -170,7 +170,7 @@ infra  ──▶  application  ──▶  domain
 - **domain** não importa nada de `application`, de `infra` nem de bibliotecas de terceiros. A única importação externa é o built-in `node:crypto` (`randomUUID`) nas entidades.
 - **application** importa só de `domain` e, para as portas de eventos, tipos de `@microservices/contracts`. Exemplo: `application/ports/order-events-publisher.ts` faz `import type { OrderCanceledMessage, OrderCreatedMessage } from "@microservices/contracts"`.
 - **infra** implementa as portas e, nos adapters de entrada, depende do caso de uso só pelo formato `Pick<UseCase, "execute">` (`createOrder: Pick<CreateOrderUseCase, "execute">`, `type CancelInvoice = Pick<CancelInvoiceUseCase, "execute">`). Assim, o teste do adapter injeta `{ execute: vi.fn() }` sem montar o caso de uso real.
-- `@microservices/messaging` só é importado em `infra/` e no `server.ts`.
+- `@microservices/messaging` só é importado em `infra/` e em `bootstrap/`.
 - Os casos de uso recebem as portas pelo construtor e as guardam em campos privados `#`.
 - Os bounded contexts não importam código uns dos outros: o invoices tem o próprio `Money` e guarda um retrato do cliente vindo da mensagem, sem conhecer o domínio do orders.
 
@@ -211,41 +211,41 @@ Adapters de **entrada** (não implementam interface, chamam o caso de uso):
 
 Os handlers são registrados com `startConsumer` do pacote de mensageria, que cuida de ack, retry e DLQ.
 
-### 3.4 `server.ts` como composition root
+### 3.4 `bootstrap/` e `server.ts` como composition root
 
-O `server.ts` é o único lugar que conhece as implementações concretas. A ordem é sempre: adapters de saída → use cases → adapters de entrada (HTTP e consumers) → relay do outbox → `listen` → registro do `shutdown`. Trecho de `services/invoices/src/server.ts`:
+A composição fica em `src/bootstrap/`, o único lugar (junto com o `server.ts`) que conhece as implementações concretas:
+
+| Arquivo | O que faz |
+| --- | --- |
+| `bootstrap/use-cases.ts` | `createUseCases()`: instancia os adapters de saída (repositórios, queries, unit of work, gateway) e devolve um objeto com todos os use cases. Exporta `type UseCases`. |
+| `bootstrap/messaging.ts` | `startConsumers(useCases)`: um `startConsumer(channel, { ...queues, maxRetries: 3 }, createXxxHandler(useCase))` por fila; devolve um `Consumer` cujo `stop()` encerra todos, na ordem em que subiram. `startOutboxRelay()`: cria e inicia o `OutboxRelay`. |
+| `bootstrap/connections.ts` | `closeConnections()`: `markBrokerShuttingDown()`, fecha os channels, a conexão do RabbitMQ e o pool do Postgres. |
+| `bootstrap/graceful-shutdown.ts` | `registerGracefulShutdown(serviceName, steps)` (ver [3.6](#36-ciclo-de-vida-dos-serviços)). |
+
+O `server.ts` só liga essas peças ao Fastify. Ordem: use cases → adapters de entrada (HTTP e consumers) → relay do outbox → `listen` → registro do shutdown. `services/invoices/src/server.ts`:
 
 ```ts
 import "@opentelemetry/auto-instrumentations-node/register";
 
 // ...imports
 
-const invoicesRepository = new DrizzleInvoicesRepository(db);
-const unitOfWork = new DrizzleUnitOfWork(db);
+const useCases = createUseCases();
+const consumers = await startConsumers(useCases);
+const outboxRelay = startOutboxRelay();
+const app = buildApp(useCases);
 
-const createInvoiceFromOrder = new CreateInvoiceFromOrderUseCase(invoicesRepository, unitOfWork);
+app
+  .listen({ host: "0.0.0.0", port: Number(process.env.PORT ?? 3334) })
+  .then(() => {
+    console.log("[Invoices] HTTP Server running !");
+  });
 
-const orderCreatedConsumer = await startConsumer(
-  ordersChannel,
-  {
-    queue: orderQueues.orderCreated.queue,
-    deadLetterQueue: orderQueues.orderCreated.deadLetterQueue,
-    maxRetries: 3,
-  },
-  createOrderCreatedHandler(createInvoiceFromOrder),
-);
-
-const outboxRelay = new OutboxRelay(new DrizzleOutboxStore(db), invoicesChannel, {
-  exchange: EVENTS_EXCHANGE,
-  routingKeys: ROUTING_KEY_BY_EVENT_TYPE,
-});
-outboxRelay.start();
-
-const app = buildApp({ getInvoice, listInvoices });
-app.listen({ host: "0.0.0.0", port: Number(process.env.PORT ?? 3334) });
-
-process.once("SIGTERM", shutdown);
-process.once("SIGINT", shutdown);
+registerGracefulShutdown("Invoices", [
+  () => consumers.stop(),
+  () => app.close(),
+  () => outboxRelay.stop(),
+  closeConnections,
+]);
 ```
 
 O import do OpenTelemetry precisa ser o **primeiro**, para a auto-instrumentação conseguir aplicar patch em `http`, `fastify`, `pg` e `amqplib` antes de eles serem carregados.
@@ -264,7 +264,7 @@ Se qualquer um dos dois falhar (por exemplo, a mensagem fora do contrato no `par
 
 ### 3.6 Ciclo de vida dos serviços
 
-**Graceful shutdown.** Cada `server.ts` registra `shutdown(signal)` com `process.once("SIGTERM", ...)` (enviado pelo ECS e pelo `node --watch` ao reiniciar) e `process.once("SIGINT", ...)` (Ctrl+C). Uma segunda chamada durante o encerramento é ignorada. Um `setTimeout` de **10 s** (com `.unref()`) loga `Forced shutdown` e chama `process.exit(1)` se algum passo travar. A ordem de encerramento é a mesma nos três serviços:
+**Graceful shutdown.** Cada `server.ts` chama `registerGracefulShutdown(serviceName, steps)` (`bootstrap/graceful-shutdown.ts`), que registra `shutdown(signal)` com `process.once("SIGTERM", ...)` (enviado pelo ECS e pelo `node --watch` ao reiniciar) e `process.once("SIGINT", ...)` (Ctrl+C). Uma segunda chamada durante o encerramento é ignorada. Um `setTimeout` de **10 s** (com `.unref()`) loga `Forced shutdown` e chama `process.exit(1)` se algum passo travar. Os passos rodam em sequência, na ordem da lista, que é a mesma nos três serviços:
 
 | Passo | O que acontece | orders | invoices | payments |
 | --- | --- | --- | --- | --- |
@@ -272,10 +272,10 @@ Se qualquer um dos dois falhar (por exemplo, a mensagem fora do contrato no `par
 | 2 | `consumer.stop()` de cada consumer: `channel.cancel(consumerTag)` e espera as mensagens em processamento | payment-approved, payment-failed | order-created, order-canceled, payment-approved | invoice-created |
 | 3 | `app.close()`: para de aceitar HTTP e espera as requisições em andamento | ✓ | ✓ | ✓ |
 | 4 | `outboxRelay.stop()`: cancela o próximo ciclo e espera o ciclo em andamento | ✓ | ✓ | ✓ |
-| 5 | `markBrokerShuttingDown()`, fecha os channels e a conexão do RabbitMQ | ✓ | ✓ | ✓ |
-| 6 | `db.$client.end()` e `process.exit(0)` | ✓ | ✓ | ✓ |
+| 5 | `closeConnections()`: `markBrokerShuttingDown()`, fecha os channels, a conexão do RabbitMQ e `db.$client.end()` | ✓ | ✓ | ✓ |
+| 6 | `process.exit(0)` | ✓ | ✓ | ✓ |
 
-Recurso novo com conexão ou trabalho em andamento precisa entrar na função `shutdown`.
+Recurso novo com conexão ou trabalho em andamento precisa entrar nos passos do shutdown: channel ou conexão novos vão no `closeConnections`.
 
 **Conexão com o RabbitMQ.** O `client.ts` de cada serviço conecta com `connectWithRetry` (do pacote): até 10 tentativas, com espera que dobra a cada falha (1 s, 2 s, 4 s...) limitada a 30 s, e um `console.warn` por falha. Esgotadas as tentativas, o erro é relançado no top-level await e o processo cai.
 
@@ -409,8 +409,8 @@ Fica em `packages/messaging`: código técnico de mensageria, independente de ba
 
 1. `npm install @microservices/messaging -w @microservices/<serviço>` e, no Dockerfile, copiar `packages/messaging/package.json` na etapa deps e `packages/messaging` no runner.
 2. `infra/messaging/client.ts`: `export const broker = await connectWithRetry(() => amqp.connect(BROKER_URL))`, com o `markBrokerShuttingDown` e o `on("close")` dos outros serviços.
-3. Para **consumir**: em `topology.ts`, uma chamada a `declareConsumerQueues` por fila (nome `<serviço>.<evento>`); no channel de consumo, chame essa função; no `server.ts`, `startConsumer(channel, { queue, deadLetterQueue, maxRetries: 3 }, createXxxHandler(useCase))` e `consumer.stop()` no `shutdown`.
-4. Para **publicar**: tabela `outbox_events` + migration, `DrizzleOutboxStore` (copie de um serviço existente), `Outbox<Xxx>EventsPublisher` dentro de um `DrizzleUnitOfWork`, um channel de confirm que declara a exchange, `routing-keys.ts` e `new OutboxRelay(new DrizzleOutboxStore(db), channel, { exchange: EVENTS_EXCHANGE, routingKeys })` com `start()` no boot e `stop()` no `shutdown`, antes de fechar o RabbitMQ.
+3. Para **consumir**: em `topology.ts`, uma chamada a `declareConsumerQueues` por fila (nome `<serviço>.<evento>`); no channel de consumo, chame essa função; no `startConsumers` de `bootstrap/messaging.ts`, `startConsumer(channel, { ...queues, maxRetries: 3 }, createXxxHandler(useCase))` (o `stop()` do retorno já cobre o shutdown).
+4. Para **publicar**: tabela `outbox_events` + migration, `DrizzleOutboxStore` (copie de um serviço existente), `Outbox<Xxx>EventsPublisher` dentro de um `DrizzleUnitOfWork`, um channel de confirm que declara a exchange, `routing-keys.ts` e `new OutboxRelay(new DrizzleOutboxStore(db), channel, { exchange: EVENTS_EXCHANGE, routingKeys })` com `start()` no boot (`startOutboxRelay` em `bootstrap/messaging.ts`) e `stop()` no shutdown, antes do `closeConnections`.
 
 ---
 
@@ -855,8 +855,8 @@ Checklist na ordem em que o trabalho deve ser feito. Pule os passos que a featur
    - Evento publicado: grave no outbox dentro do unit of work (validando com o schema do contrato) e adicione o tipo em `infra/messaging/routing-keys.ts`.
 6. **Adapter de entrada + teste**:
    - Rota em `src/infra/http/app.ts`, recebendo o use case como `Pick<XxxUseCase, "execute">`. Teste em `test/infra/http/` com `app.inject`.
-   - Ou handler em `src/infra/messaging/handlers/<evento>.handler.ts`, validando `payload.data` com `safeParse` e lançando `InvalidMessageError` se falhar. Decida quais erros do use case são permanentes e converta-os com `toPermanentError`. Declare as filas com `declareConsumerQueues` em `topology.ts` e registre o handler com `startConsumer` no `server.ts`, com `stop()` no `shutdown`. O consumidor precisa ser idempotente.
-7. **Ligar no `server.ts`**: instancie o adapter concreto, depois o use case, e passe o use case para o adapter de entrada. O import do OpenTelemetry continua na primeira linha.
+   - Ou handler em `src/infra/messaging/handlers/<evento>.handler.ts`, validando `payload.data` com `safeParse` e lançando `InvalidMessageError` se falhar. Decida quais erros do use case são permanentes e converta-os com `toPermanentError`. Declare as filas com `declareConsumerQueues` em `topology.ts` e registre o handler com `startConsumer` no `startConsumers` de `bootstrap/messaging.ts`. O consumidor precisa ser idempotente.
+7. **Ligar no `bootstrap/`**: instancie o adapter concreto e o use case em `createUseCases()` (`bootstrap/use-cases.ts`); a rota recebe o use case pelo `buildApp(useCases)` e o consumer pelo `startConsumers(useCases)`. O import do OpenTelemetry continua na primeira linha do `server.ts`.
 8. **Migration**: gere com `drizzle-kit generate` (ver [9.6](#96-migrations)) e aplique no banco de dev (ver [9.2](#92-passo-a-passo-do-zero)). No banco de teste, o `globalSetup` do Vitest aplica a migration sozinho.
 
 No fim, rode `npm run typecheck` e `npm test` na raiz.
@@ -903,9 +903,8 @@ Itens encontrados durante a leitura do código e ainda não resolvidos. Já fora
 11. **`InvalidMoneyError` fora de um `errors.ts`.** Os erros dos agregados ficam em `domain/<agregado>/errors.ts`, mas o `InvalidMoneyError` está dentro de `domain/shared/money.ts` (nos três serviços).
 12. **Sufixo `.handler.ts`.** Os handlers usam sufixo com ponto (`order-created.handler.ts`). Os outros arquivos usam só kebab-case.
 13. **Nome do tipo de argumentos dos use cases.** O invoices usa `CreateInvoiceFromOrderUseCaseArgs`; os demais usam `<Nome>Args` (`CreateOrderArgs`, `CancelInvoiceArgs`).
-14. **Comentários de seção no `server.ts`.** O orders tem "Adapters de sáida" (com erro de acentuação); invoices e payments têm "Adapters de saída", "UseCases" e "Adapters de entrada".
-15. **`FakePaymentGateway` é um adapter de produção** com o prefixo `Fake`, que nos outros lugares indica test double em `test/fakes/`.
+14. **`FakePaymentGateway` é um adapter de produção** com o prefixo `Fake`, que nos outros lugares indica test double em `test/fakes/`.
 
 ### Testes
 
-16. **Sem testes para:** as funções de `topology.ts` dos serviços (o `declareConsumerQueues` do pacote é testado), o `shutdown` dos `server.ts`, o `GET /health` do orders e o pacote `@microservices/contracts`.
+15. **Sem testes para:** as funções de `topology.ts` dos serviços (o `declareConsumerQueues` do pacote é testado), o `registerGracefulShutdown` e o `closeConnections` de `bootstrap/`, o `GET /health` do orders e o pacote `@microservices/contracts`.

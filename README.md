@@ -6,7 +6,7 @@ Sistema de pedidos, faturamento e pagamentos em microsserviços orientados a eve
 
 ## Destaques técnicos
 
-- **Arquitetura hexagonal:** domínio e casos de uso não dependem de Fastify, Drizzle nem RabbitMQ; os adapters ficam em `infra/` e são ligados só no `server.ts`, o que permite testar as regras de negócio com fakes em memória.
+- **Arquitetura hexagonal:** domínio e casos de uso não dependem de Fastify, Drizzle nem RabbitMQ; os adapters ficam em `infra/` e são ligados só no composition root (`src/bootstrap/` + `server.ts`), o que permite testar as regras de negócio com fakes em memória.
 - **Saga coreografada entre três serviços:** pedido, fatura e pagamento avançam reagindo a eventos, sem orquestrador central e sem acoplamento síncrono.
 - **Outbox transacional com publisher confirms:** estado e evento são gravados na mesma transação, e um relay publica o evento e só o marca como enviado depois do confirm do RabbitMQ, então nenhum evento se perde se o broker cair.
 - **Consumidores idempotentes:** a entrega é at-least-once, e cada consumidor tolera mensagens duplicadas (chaves `unique` e transições de status que não fazem nada quando o destino já foi atingido).
@@ -316,7 +316,7 @@ O CI ([.github/workflows/ci.yml](.github/workflows/ci.yml)) roda `npm ci`, `npm 
 └── docker-compose.yml   # RabbitMQ, Jaeger e Kong para desenvolvimento local
 ```
 
-Cada serviço segue a mesma organização: `src/domain`, `src/application`, `src/infra` e `src/server.ts` (composition root), com `test/` espelhando o `src/`.
+Cada serviço segue a mesma organização: `src/domain`, `src/application`, `src/infra`, `src/bootstrap` e `src/server.ts` (composition root), com `test/` espelhando o `src/`.
 
 ## Decisões e limitações conhecidas
 

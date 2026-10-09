@@ -32,8 +32,8 @@ Os testes em `test/infra/db/` precisam do Postgres do serviço rodando (o `globa
 - `src/domain/<agregado>/` (+ `shared/`): não importa de `application`, `infra` nem de pacotes de terceiros (só built-ins como `node:crypto`).
 - `src/application/`: `use-cases/` (classe com `execute(args)`), `ports/` e `queries/` (portas de leitura que devolvem DTOs, sem passar pelas entidades). Importa só de `domain` e tipos de `@microservices/contracts`.
 - `src/infra/`: adapters (`db/`, `http/`, `messaging/`, `gateway/`). Adapters de entrada recebem `Pick<XUseCase, "execute">`.
-- `src/server.ts`: composition root, o único lugar que instancia adapters concretos.
-- Nova dependência de use case: interface (repositório em `domain/<agregado>/`, outras em `application/ports/`), adapter em `infra/`, fake em `test/fakes/`, ligação no `server.ts`.
+- `src/bootstrap/` + `src/server.ts`: composition root, o único lugar que instancia adapters concretos. `bootstrap/use-cases.ts` (`createUseCases()`: adapters de saída + use cases), `bootstrap/messaging.ts` (`startConsumers`, `startOutboxRelay`), `bootstrap/connections.ts` (`closeConnections`) e `bootstrap/graceful-shutdown.ts`. O `server.ts` só liga essas peças ao Fastify.
+- Nova dependência de use case: interface (repositório em `domain/<agregado>/`, outras em `application/ports/`), adapter em `infra/`, fake em `test/fakes/`, ligação no `bootstrap/use-cases.ts`.
 - Bounded contexts não importam código uns dos outros (cada serviço tem o próprio `Money`).
 
 ## Mensageria
@@ -64,7 +64,7 @@ Estilo:
 
 - `@opentelemetry/auto-instrumentations-node/register` continua sendo a **primeira linha** de cada `server.ts`.
 - `infra/db/client.ts` e `infra/messaging/client.ts` exigem `DATABASE_URL` / `BROKER_URL` e conectam no import (top-level await, com retentativas no broker). Os `infra/messaging/channels/*.ts` também. Não importe esses módulos em testes que não precisam deles.
-- Os três `server.ts` têm graceful shutdown (SIGTERM/SIGINT, timeout de 10s): consumers, HTTP, relay, channels, broker e banco, nessa ordem. Recurso novo com conexão ou trabalho em andamento precisa entrar na função `shutdown`. Ver ARCHITECTURE.md §3.6.
+- Os três `server.ts` registram graceful shutdown com `registerGracefulShutdown` (SIGTERM/SIGINT, timeout de 10s): consumers, HTTP, relay e `closeConnections` (channels, broker e banco), nessa ordem. Recurso novo com conexão ou trabalho em andamento precisa entrar nos passos do shutdown (channel/conexão novo vai no `closeConnections`). Ver ARCHITECTURE.md §3.6.
 - Eventos publicados antes de existir a fila são descartados: numa instalação nova, suba os três serviços antes do primeiro pedido.
 - `npm run db:migrate` não carrega o `.env`: defina `DATABASE_URL` no ambiente.
 - As seções 12 e 13 do ARCHITECTURE.md listam limitações e inconsistências conhecidas. Não as "corrija" numa mudança não relacionada.
