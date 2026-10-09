@@ -11,3 +11,5 @@ config:
     secure: AAABADSjfqQhLfcwf4F7AzJvIdlw8VGqcWccg9gFfl3Ai9rK
   microsservico-node-infra:brokerPassword:
     secure: AAABADKQGzp4WclqNnCCAYx3TXJWfcHJ7lO5Sv/mGhLN5SBw
+  microsservico-node-infra:paymentsDatabaseUrl:
+    secure: AAABAIXsPD0Bqlr0I94taCLmAnLFVBdAwzBzdyyTwaaB3qFbYgzunlFV94lrdzAgqYvYRcxH/MvL/mzFy7SqXVPVTUA6CP+QkQWq2/t+QCrNLmh/wxfqkABbUmvYGM1NLsgZZ3RadwBNHOWAS4kKPuOFES4ZmUp7zsC5YQm93h/VviQ4dbvKyWAcWInuWCcHz4zKCCefW6+O9P1V/7J4TFUF5pfo/drHvbD7ZCcH/uA5Y7N+3oE0
