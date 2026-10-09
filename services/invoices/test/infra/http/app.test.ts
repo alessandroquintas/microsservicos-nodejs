@@ -146,3 +146,15 @@ describe("GET /invoices/:id", () => {
     expect(response.json()).toEqual({ message: "Internal server error" });
   });
 });
+
+describe("GET /docs/json", () => {
+  it("documents the business routes in the OpenAPI spec", async () => {
+    const response = await app.inject({ method: "GET", url: "/docs/json" });
+
+    expect(response.statusCode).toBe(200);
+    expect(Object.keys(response.json().paths)).toEqual([
+      "/invoices",
+      "/invoices/{id}",
+    ]);
+  });
+});

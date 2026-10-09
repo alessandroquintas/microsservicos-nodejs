@@ -9,6 +9,7 @@ import type { GetInvoiceUseCase } from "../../application/use-cases/get-invoice.
 import type { ListInvoicesUseCase } from "../../application/use-cases/list-invoices.ts";
 import { DOMAIN_ERROR_STATUSES } from "./common/errors/domain-error-statuses.ts";
 import { createErrorHandler } from "./common/errors/error-handler.ts";
+import { registerSwagger } from "./swagger.ts";
 import { InvoicesController } from "./controllers/invoices-controller.ts";
 import { invoicesRoutes } from "./routes/invoices-routes.ts";
 
@@ -25,6 +26,7 @@ export function buildApp({ getInvoice, listInvoices }: AppDependencies) {
   app.setErrorHandler(createErrorHandler(DOMAIN_ERROR_STATUSES));
 
   app.register(fastifyCors, { origin: "*" });
+  registerSwagger(app);
 
   app.get("/health", () => {
     return "Ok";
